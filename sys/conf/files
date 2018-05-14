@@ -1800,6 +1800,7 @@ dev/gpio/gpiobus.c		optional gpio				\
 dev/gpio/gpioc.c		optional gpio				\
 	dependency	"gpio_if.h"
 dev/gpio/gpioiic.c		optional gpioiic
+dev/gpio/gpiointr.c		optional gpiointr
 dev/gpio/gpioled.c		optional gpioled !fdt
 dev/gpio/gpioled_fdt.c		optional gpioled fdt
 dev/gpio/gpiopower.c		optional gpiopower fdt
