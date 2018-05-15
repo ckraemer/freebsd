@@ -45,6 +45,6 @@ static driver_t gpiointr_driver = {
 
 static devclass_t gpiointr_devclass;
 
-DRIVER_MODULE(gpiointr, gpiobus, gpiointr_driver, gpiointr_devclass, NULL, NULL);
+DRIVER_MODULE(gpiointr, simplebus, gpiointr_driver, gpiointr_devclass, NULL, NULL);
 MODULE_VERSION(gpiointr, 1);
 MODULE_DEPEND(gpiointr, gpiobus, 1, 1, 1);
