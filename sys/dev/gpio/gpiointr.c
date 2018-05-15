@@ -3,6 +3,11 @@
 #include <sys/bus.h>
 #include <sys/module.h>
 
+#include <dev/fdt/fdt_common.h>
+#include <dev/ofw/ofw_bus.h>
+
+#include <dev/gpio/gpiobusvar.h>
+
 struct gpiointr_softc {
 };
 
@@ -13,8 +18,12 @@ static int gpiointr_detach(device_t);
 static int
 gpiointr_probe(device_t dev) {
 	device_printf(dev, "probe\n");
+
+	if (!ofw_bus_is_compatible(dev, "gpio-intr"))
+		return (ENXIO);
+
 	device_set_desc(dev, "GPIO interrupt userspace interface driver");
-	return (0);
+	return (BUS_PROBE_DEFAULT);
 }
 
 static int
