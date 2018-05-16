@@ -3,6 +3,8 @@
 #include <sys/bus.h>
 #include <sys/module.h>
 #include <sys/gpio.h>
+#include <sys/conf.h>
+#include <sys/stat.h>
 
 #include <dev/fdt/fdt_common.h>
 #include <dev/ofw/ofw_bus.h>
@@ -15,6 +17,11 @@ struct gpiointr_softc {
 	int		intr_rid;
 	struct resource	*intr_res;
 	void		*intr_cookie;
+	struct cdev     *cdev;
+};
+
+static struct cdevsw gpiointr_cdevsw = {
+	.d_version = D_VERSION,
 };
 
 static int	gpiointr_probe(device_t);
@@ -38,6 +45,8 @@ gpiointr_attach(device_t dev) {
 	struct gpiointr_softc *sc;
 	phandle_t node;
 	int err;
+	int unit;
+	struct make_dev_args dev_args;
 
 	device_printf(dev, "attach\n");
 
@@ -83,6 +92,24 @@ gpiointr_attach(device_t dev) {
 	}
 
 	device_printf(dev, "interrupt resource set up\n");
+
+	unit = device_get_unit(dev);
+
+	make_dev_args_init(&dev_args);
+
+	dev_args.mda_devsw = &gpiointr_cdevsw;
+	dev_args.mda_uid = UID_ROOT;
+	dev_args.mda_gid = GID_WHEEL;
+	dev_args.mda_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
+	dev_args.mda_si_drv1 = sc;
+
+	err = make_dev_s(&dev_args, &sc->cdev, "gpiointr%d", unit);
+	if (err != 0) {
+		device_printf(dev, "cannot create gpiointr dev\n");
+		return (err);
+	}
+
+	device_printf(dev, "created gpiointr%d character device\n", unit);
 
 	return (0);
 }
