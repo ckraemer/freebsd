@@ -131,6 +131,8 @@ gpiointr_interrupt_handler(void *arg)
 {
 	struct gpiointr_softc *sc = arg;
 
+	wakeup(sc);
+
 	device_printf(sc->dev, "interrupt handler executed!\n");
 }
 
@@ -151,8 +153,16 @@ gpiointr_close(struct cdev *dev, int fflag, int devtype, struct thread *td) {
 static int
 gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag) {
 	struct gpiointr_softc *sc = dev->si_drv1;
+	int err;
 	device_printf(sc->dev, "read\n");
-	return (0);
+
+	do {
+		device_printf(sc->dev, "sleep\n");
+		err = tsleep(sc, 0, "gpiointrwait", 20 * hz);
+	} while (err == EWOULDBLOCK);
+
+	device_printf(sc->dev, "sleep ended\n");
+	return (err);
 }
 
 static device_method_t gpiointr_methods[] = {
