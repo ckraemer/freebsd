@@ -62,16 +62,10 @@ gpiointr_attach(device_t dev) {
 		return (ENXIO);
 	}
 
-	if(!OF_hasprop(node, "gpiopin"))
-	{
-		device_printf(dev, "no gpiopin property in fdt\n");
-		return (ENXIO);
-	}
-
-	err = gpio_pin_get_by_ofw_propidx(dev, node, "gpiopin", 0, &sc->pin);
+	err = gpio_pin_get_by_ofw_idx(dev, node, 0, &sc->pin);
 	if(err != 0)
 	{
-		device_printf(dev, "no valid gpiopin in fdt");
+		device_printf(dev, "no valid gpio pin in fdt\n");
 		return (err);
 	}
 
