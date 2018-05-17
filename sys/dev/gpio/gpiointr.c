@@ -37,8 +37,6 @@ static struct cdevsw gpiointr_cdevsw = {
 
 static int
 gpiointr_probe(device_t dev) {
-	device_printf(dev, "probe\n");
-
 	if (!ofw_bus_is_compatible(dev, "gpio-intr"))
 		return (ENXIO);
 
@@ -53,8 +51,6 @@ gpiointr_attach(device_t dev) {
 	int err;
 	int unit;
 	struct make_dev_args dev_args;
-
-	device_printf(dev, "attach\n");
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
@@ -79,8 +75,6 @@ gpiointr_attach(device_t dev) {
 		return (err);
 	}
 
-	device_printf(dev, "gpiopin is pin number %d\n", sc->pin->pin);
-
 	sc->intr_res = gpio_alloc_intr_resource(dev, &sc->intr_rid, RF_ACTIVE, sc->pin, GPIO_INTR_EDGE_FALLING);
 	if(sc->intr_res == NULL)
 	{
@@ -88,16 +82,12 @@ gpiointr_attach(device_t dev) {
 		return(ENXIO);
 	}
 
-	device_printf(dev, "interrupt resource allocated\n");
-
 	err = bus_setup_intr(dev, sc->intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->intr_cookie);
 	if(err != 0)
 	{
 		device_printf(dev, "cannot set up interrupt\n");
 		return (err);
 	}
-
-	device_printf(dev, "interrupt resource set up\n");
 
 	unit = device_get_unit(dev);
 
@@ -115,7 +105,7 @@ gpiointr_attach(device_t dev) {
 		return (err);
 	}
 
-	device_printf(dev, "created gpiointr%d character device\n", unit);
+	device_printf(dev, "interrupt on pin %d (falling edge)\n", sc->pin->pin);
 
 	return (0);
 }
@@ -132,21 +122,15 @@ gpiointr_interrupt_handler(void *arg)
 	struct gpiointr_softc *sc = arg;
 
 	wakeup(sc);
-
-	device_printf(sc->dev, "interrupt handler executed!\n");
 }
 
 static int
 gpiointr_open(struct cdev *dev, int oflags, int devtype, struct thread *td) {
-	struct gpiointr_softc *sc = dev->si_drv1;
-	device_printf(sc->dev, "open\n");
 	return (0);
 }
 
 static int
 gpiointr_close(struct cdev *dev, int fflag, int devtype, struct thread *td) {
-	struct gpiointr_softc *sc = dev->si_drv1;
-	device_printf(sc->dev, "close\n");
 	return (0);
 }
 
@@ -154,14 +138,11 @@ static int
 gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag) {
 	struct gpiointr_softc *sc = dev->si_drv1;
 	int err;
-	device_printf(sc->dev, "read\n");
 
 	do {
-		device_printf(sc->dev, "sleep\n");
 		err = tsleep(sc, PCATCH, "gpiointrwait", 20 * hz);
 	} while (err == EWOULDBLOCK);
 
-	device_printf(sc->dev, "sleep ended\n");
 	return (err);
 }
 
