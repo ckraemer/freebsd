@@ -20,14 +20,20 @@ struct gpiointr_softc {
 	struct cdev     *cdev;
 };
 
-static struct cdevsw gpiointr_cdevsw = {
-	.d_version = D_VERSION,
-};
-
 static int	gpiointr_probe(device_t);
 static int	gpiointr_attach(device_t);
 static int	gpiointr_detach(device_t);
 static void	gpiointr_interrupt_handler(void*);
+static int	gpiointr_open(struct cdev*, int, int, struct thread*);
+static int	gpiointr_close(struct cdev*, int, int, struct thread*);
+static int	gpiointr_read(struct cdev*, struct uio*, int);
+
+static struct cdevsw gpiointr_cdevsw = {
+	.d_version = D_VERSION,
+	.d_open = gpiointr_open,
+	.d_close = gpiointr_close,
+	.d_read = gpiointr_read
+};
 
 static int
 gpiointr_probe(device_t dev) {
@@ -126,6 +132,27 @@ gpiointr_interrupt_handler(void *arg)
 	struct gpiointr_softc *sc = arg;
 
 	device_printf(sc->dev, "interrupt handler executed!\n");
+}
+
+static int
+gpiointr_open(struct cdev *dev, int oflags, int devtype, struct thread *td) {
+	struct gpiointr_softc *sc = dev->si_drv1;
+	device_printf(sc->dev, "open\n");
+	return (0);
+}
+
+static int
+gpiointr_close(struct cdev *dev, int fflag, int devtype, struct thread *td) {
+	struct gpiointr_softc *sc = dev->si_drv1;
+	device_printf(sc->dev, "close\n");
+	return (0);
+}
+
+static int
+gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag) {
+	struct gpiointr_softc *sc = dev->si_drv1;
+	device_printf(sc->dev, "read\n");
+	return (0);
 }
 
 static device_method_t gpiointr_methods[] = {
