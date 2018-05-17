@@ -158,7 +158,7 @@ gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag) {
 
 	do {
 		device_printf(sc->dev, "sleep\n");
-		err = tsleep(sc, 0, "gpiointrwait", 20 * hz);
+		err = tsleep(sc, PCATCH, "gpiointrwait", 20 * hz);
 	} while (err == EWOULDBLOCK);
 
 	device_printf(sc->dev, "sleep ended\n");
