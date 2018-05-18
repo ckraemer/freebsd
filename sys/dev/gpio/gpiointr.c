@@ -106,7 +106,15 @@ gpiointr_attach(device_t dev) {
 
 static int
 gpiointr_detach(device_t dev) {
-	device_printf(dev, "detach\n");
+	struct gpiointr_softc *sc;
+
+	sc = device_get_softc(dev);
+
+	destroy_dev(sc->cdev);
+	bus_teardown_intr(dev, sc->intr_res, sc->intr_cookie);
+	bus_release_resource(dev, SYS_RES_IRQ, sc->intr_rid, sc-> intr_res);
+	gpio_pin_release(sc->pin);
+
 	return (0);
 }
 
