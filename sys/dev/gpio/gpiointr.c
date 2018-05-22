@@ -20,6 +20,8 @@ struct gpiointr_softc {
 	struct cdev     *cdev;
 };
 
+static int	gpiointr_allocate_pin(struct gpiointr_softc*);
+static int	gpiointr_release_pin(struct gpiointr_softc*);
 static int	gpiointr_probe(device_t);
 static int	gpiointr_attach(device_t);
 static int	gpiointr_detach(device_t);
@@ -36,6 +38,32 @@ static struct cdevsw gpiointr_cdevsw = {
 	.d_read = gpiointr_read,
 	.d_ioctl = gpiointr_ioctl
 };
+
+static int
+gpiointr_allocate_pin(struct gpiointr_softc *sc) {
+	int err;
+
+	sc->intr_res = gpio_alloc_intr_resource(sc->dev, &sc->intr_rid, RF_ACTIVE, sc->pin, GPIO_INTR_EDGE_FALLING);
+	if(sc->intr_res == NULL)
+	{
+		return(ENXIO);
+	}
+
+	err = bus_setup_intr(sc->dev, sc->intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->intr_cookie);
+	if(err != 0)
+	{
+		return (err);
+	}
+
+	return (0);
+}
+
+static int
+gpiointr_release_pin(struct gpiointr_softc *sc) {
+	bus_teardown_intr(sc->dev, sc->intr_res, sc->intr_cookie);
+	bus_release_resource(sc->dev, SYS_RES_IRQ, sc->intr_rid, sc->intr_res);
+	return (0);
+}
 
 static int
 gpiointr_probe(device_t dev) {
@@ -71,14 +99,7 @@ gpiointr_attach(device_t dev) {
 		return (err);
 	}
 
-	sc->intr_res = gpio_alloc_intr_resource(dev, &sc->intr_rid, RF_ACTIVE, sc->pin, GPIO_INTR_EDGE_FALLING);
-	if(sc->intr_res == NULL)
-	{
-		device_printf(dev, "cannot allocate interrupt resource\n");
-		return(ENXIO);
-	}
-
-	err = bus_setup_intr(dev, sc->intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->intr_cookie);
+	err = gpiointr_allocate_pin(sc);
 	if(err != 0)
 	{
 		device_printf(dev, "cannot set up interrupt\n");
@@ -113,8 +134,7 @@ gpiointr_detach(device_t dev) {
 	sc = device_get_softc(dev);
 
 	destroy_dev(sc->cdev);
-	bus_teardown_intr(dev, sc->intr_res, sc->intr_cookie);
-	bus_release_resource(dev, SYS_RES_IRQ, sc->intr_rid, sc-> intr_res);
+	gpiointr_release_pin(sc);
 	gpio_pin_release(sc->pin);
 
 	return (0);
