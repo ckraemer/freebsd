@@ -18,6 +18,7 @@ struct gpiointr_softc {
 	struct resource	*intr_res;
 	void		*intr_cookie;
 	struct cdev     *cdev;
+	bool		active;
 };
 
 static int	gpiointr_allocate_pin(struct gpiointr_softc*);
@@ -55,13 +56,19 @@ gpiointr_allocate_pin(struct gpiointr_softc *sc) {
 		return (err);
 	}
 
+	sc->active = true;
+
 	return (0);
 }
 
 static int
 gpiointr_release_pin(struct gpiointr_softc *sc) {
+	sc->active = false;
+	wakeup(sc);
+
 	bus_teardown_intr(sc->dev, sc->intr_res, sc->intr_cookie);
 	bus_release_resource(sc->dev, SYS_RES_IRQ, sc->intr_rid, sc->intr_res);
+
 	return (0);
 }
 
@@ -133,8 +140,8 @@ gpiointr_detach(device_t dev) {
 
 	sc = device_get_softc(dev);
 
-	destroy_dev(sc->cdev);
 	gpiointr_release_pin(sc);
+	destroy_dev(sc->cdev);
 	gpio_pin_release(sc->pin);
 
 	return (0);
@@ -165,6 +172,10 @@ gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag) {
 
 	do {
 		err = tsleep(sc, PCATCH, "gpiointrwait", 20 * hz);
+		if(sc->active == false)
+		{
+			err = EINTR;
+		}
 	} while (err == EWOULDBLOCK);
 
 	return (err);
