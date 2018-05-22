@@ -27,12 +27,14 @@ static void	gpiointr_interrupt_handler(void*);
 static int	gpiointr_open(struct cdev*, int, int, struct thread*);
 static int	gpiointr_close(struct cdev*, int, int, struct thread*);
 static int	gpiointr_read(struct cdev*, struct uio*, int);
+static int	gpiointr_ioctl(struct cdev*, u_long, caddr_t, int, struct thread*);
 
 static struct cdevsw gpiointr_cdevsw = {
 	.d_version = D_VERSION,
 	.d_open = gpiointr_open,
 	.d_close = gpiointr_close,
-	.d_read = gpiointr_read
+	.d_read = gpiointr_read,
+	.d_ioctl = gpiointr_ioctl
 };
 
 static int
@@ -146,6 +148,11 @@ gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag) {
 	} while (err == EWOULDBLOCK);
 
 	return (err);
+}
+
+static int
+gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td) {
+	return (0);
 }
 
 static device_method_t gpiointr_methods[] = {

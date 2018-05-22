@@ -98,6 +98,12 @@ struct gpio_req {
 	uint32_t gp_value;			/* value */
 };
 
+/* GPIO interrupt configuration */
+struct gpio_intr_config {
+	uint32_t gp_pin;			/* pin number */
+	uint32_t gp_intr_flags;			/* trigger type */
+};
+
 /*
  * gpio_access_32 / GPIOACCESS32
  *
@@ -175,5 +181,6 @@ struct gpio_config_32 {
 #define	GPIOSETNAME		_IOW('G', 6, struct gpio_pin)
 #define	GPIOACCESS32		_IOWR('G', 7, struct gpio_access_32)
 #define	GPIOCONFIG32		_IOW('G', 8, struct gpio_config_32)
+#define	GPIOINTRCONFIG		_IOW('G', 9, struct gpio_intr_config)
 
 #endif /* __GPIO_H__ */
