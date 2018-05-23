@@ -188,6 +188,33 @@ gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag)
 static int
 gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td)
 {
+	struct gpiointr_softc *sc = dev->si_drv1;
+	struct gpio_intr_config intr_config;
+	int err;
+
+	switch (cmd) {
+	case GPIOINTRCONFIG:
+		bcopy(data, &intr_config, sizeof(intr_config));
+	        err = gpiointr_release_pin(sc);
+		if (err != 0) {
+			device_printf(sc->dev, "cannot release interrupt on pin %d\n", sc->pin->pin);
+			return (err);
+		}
+		/*
+		 * Only the pin number gets updated. The bus of the pin remains the same as initially
+		 * specified in the DTB. The configuration flags are also not updated.
+		 */
+		sc->pin->pin = intr_config.gp_pin;
+		err = gpiointr_allocate_pin(sc);
+		if (err != 0) {
+			device_printf(sc->dev, "cannot set up interrupt on pin %d\n", sc->pin->pin);
+			return (err);
+		}
+		device_printf(sc->dev, "interrupt on pin %d (falling edge)\n", sc->pin->pin);
+		break;
+	default:
+		return (ENOTTY);
+	}
 
 	return (0);
 }
