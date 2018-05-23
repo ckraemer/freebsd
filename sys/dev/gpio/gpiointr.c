@@ -41,20 +41,17 @@ static struct cdevsw gpiointr_cdevsw = {
 };
 
 static int
-gpiointr_allocate_pin(struct gpiointr_softc *sc) {
+gpiointr_allocate_pin(struct gpiointr_softc *sc)
+{
 	int err;
 
 	sc->intr_res = gpio_alloc_intr_resource(sc->dev, &sc->intr_rid, RF_ACTIVE, sc->pin, GPIO_INTR_EDGE_FALLING);
-	if(sc->intr_res == NULL)
-	{
+	if (sc->intr_res == NULL)
 		return(ENXIO);
-	}
 
 	err = bus_setup_intr(sc->dev, sc->intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->intr_cookie);
-	if(err != 0)
-	{
+	if (err != 0)
 		return (err);
-	}
 
 	sc->active = true;
 
@@ -62,7 +59,9 @@ gpiointr_allocate_pin(struct gpiointr_softc *sc) {
 }
 
 static int
-gpiointr_release_pin(struct gpiointr_softc *sc) {
+gpiointr_release_pin(struct gpiointr_softc *sc)
+{
+
 	sc->active = false;
 	wakeup(sc);
 
@@ -73,7 +72,9 @@ gpiointr_release_pin(struct gpiointr_softc *sc) {
 }
 
 static int
-gpiointr_probe(device_t dev) {
+gpiointr_probe(device_t dev)
+{
+
 	if (!ofw_bus_is_compatible(dev, "gpio-intr"))
 		return (ENXIO);
 
@@ -82,7 +83,8 @@ gpiointr_probe(device_t dev) {
 }
 
 static int
-gpiointr_attach(device_t dev) {
+gpiointr_attach(device_t dev)
+{
 	struct gpiointr_softc *sc;
 	phandle_t node;
 	int err;
@@ -93,22 +95,19 @@ gpiointr_attach(device_t dev) {
 	sc->dev = dev;
 
 	node = ofw_bus_get_node(dev);
-	if(node == -1)
-	{
+	if (node == -1) {
 		device_printf(dev, "no node in fdt\n");
 		return (ENXIO);
 	}
 
 	err = gpio_pin_get_by_ofw_idx(dev, node, 0, &sc->pin);
-	if(err != 0)
-	{
+	if (err != 0) {
 		device_printf(dev, "no valid gpio pin in fdt\n");
 		return (err);
 	}
 
 	err = gpiointr_allocate_pin(sc);
-	if(err != 0)
-	{
+	if (err != 0) {
 		device_printf(dev, "cannot set up interrupt\n");
 		return (err);
 	}
@@ -135,7 +134,8 @@ gpiointr_attach(device_t dev) {
 }
 
 static int
-gpiointr_detach(device_t dev) {
+gpiointr_detach(device_t dev)
+{
 	struct gpiointr_softc *sc;
 
 	sc = device_get_softc(dev);
@@ -156,24 +156,28 @@ gpiointr_interrupt_handler(void *arg)
 }
 
 static int
-gpiointr_open(struct cdev *dev, int oflags, int devtype, struct thread *td) {
+gpiointr_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
+{
+
 	return (0);
 }
 
 static int
-gpiointr_close(struct cdev *dev, int fflag, int devtype, struct thread *td) {
+gpiointr_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
+{
+
 	return (0);
 }
 
 static int
-gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag) {
+gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag)
+{
 	struct gpiointr_softc *sc = dev->si_drv1;
 	int err;
 
 	do {
 		err = tsleep(sc, PCATCH, "gpiointrwait", 20 * hz);
-		if(sc->active == false)
-		{
+		if (sc->active == false) {
 			err = EINTR;
 		}
 	} while (err == EWOULDBLOCK);
@@ -182,7 +186,9 @@ gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag) {
 }
 
 static int
-gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td) {
+gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td)
+{
+
 	return (0);
 }
 
