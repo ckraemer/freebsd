@@ -43,17 +43,32 @@ static struct cdevsw gpiointr_cdevsw = {
 static int
 gpiointr_allocate_pin(struct gpiointr_softc *sc)
 {
+	device_t busdev;
 	int err;
 
-	sc->intr_res = gpio_alloc_intr_resource(sc->dev, &sc->intr_rid, RF_ACTIVE, sc->pin, GPIO_INTR_EDGE_FALLING);
-	if (sc->intr_res == NULL)
-		return(ENXIO);
+	busdev = GPIO_GET_BUS(sc->pin->dev);
+	if (busdev == NULL)
+		return (ENODEV);
 
-	err = bus_setup_intr(sc->dev, sc->intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->intr_cookie);
+	err = gpiobus_acquire_pin(busdev, sc->pin->pin);
 	if (err != 0)
+		return(EBUSY);
+
+	sc->intr_res = gpio_alloc_intr_resource(sc->pin->dev, &sc->intr_rid, RF_ACTIVE, sc->pin, GPIO_INTR_EDGE_FALLING);
+	if (sc->intr_res == NULL) {
+		device_printf(sc->dev, "cannot allocate interrupt resource\n");
+		return(ENXIO);
+	}
+
+	err = bus_setup_intr(sc->pin->dev, sc->intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->intr_cookie);
+	if (err != 0) {
+		device_printf(sc->dev, "cannot set up interrupt\n");
 		return (err);
+	}
 
 	sc->active = true;
+
+	device_printf(sc->dev, "interrupt on %s pin %d (falling edge)\n", device_get_nameunit(sc->pin->dev), sc->pin->pin);
 
 	return (0);
 }
@@ -61,12 +76,19 @@ gpiointr_allocate_pin(struct gpiointr_softc *sc)
 static int
 gpiointr_release_pin(struct gpiointr_softc *sc)
 {
+	device_t busdev;
 
 	sc->active = false;
 	wakeup(sc);
 
-	bus_teardown_intr(sc->dev, sc->intr_res, sc->intr_cookie);
-	bus_release_resource(sc->dev, SYS_RES_IRQ, sc->intr_rid, sc->intr_res);
+	bus_teardown_intr(sc->pin->dev, sc->intr_res, sc->intr_cookie);
+	bus_release_resource(sc->pin->dev, SYS_RES_IRQ, sc->intr_rid, sc->intr_res);
+
+	busdev = GPIO_GET_BUS(sc->pin->dev);
+	if (busdev == NULL)
+		return (ENODEV);
+
+	gpiobus_release_pin(busdev, sc->pin->pin);
 
 	return (0);
 }
@@ -74,9 +96,6 @@ gpiointr_release_pin(struct gpiointr_softc *sc)
 static int
 gpiointr_probe(device_t dev)
 {
-
-	if (!ofw_bus_is_compatible(dev, "gpio-intr"))
-		return (ENXIO);
 
 	device_set_desc(dev, "GPIO interrupt userspace interface driver");
 	return (BUS_PROBE_DEFAULT);
@@ -86,7 +105,6 @@ static int
 gpiointr_attach(device_t dev)
 {
 	struct gpiointr_softc *sc;
-	phandle_t node;
 	int err;
 	int unit;
 	struct make_dev_args dev_args;
@@ -94,23 +112,8 @@ gpiointr_attach(device_t dev)
 	sc = device_get_softc(dev);
 	sc->dev = dev;
 
-	node = ofw_bus_get_node(dev);
-	if (node == -1) {
-		device_printf(dev, "no node in fdt\n");
-		return (ENXIO);
-	}
-
-	err = gpio_pin_get_by_ofw_idx(dev, node, 0, &sc->pin);
-	if (err != 0) {
-		device_printf(dev, "no valid gpio pin in fdt\n");
-		return (err);
-	}
-
-	err = gpiointr_allocate_pin(sc);
-	if (err != 0) {
-		device_printf(dev, "cannot set up interrupt\n");
-		return (err);
-	}
+	sc->pin = malloc(sizeof(struct gpiobus_pin), M_DEVBUF, M_WAITOK | M_ZERO);
+	sc->pin->dev = device_get_parent(dev);
 
 	unit = device_get_unit(dev);
 
@@ -128,8 +131,6 @@ gpiointr_attach(device_t dev)
 		return (err);
 	}
 
-	device_printf(dev, "interrupt on pin %d (falling edge)\n", sc->pin->pin);
-
 	return (0);
 }
 
@@ -140,9 +141,9 @@ gpiointr_detach(device_t dev)
 
 	sc = device_get_softc(dev);
 
-	gpiointr_release_pin(sc);
+	if (sc->active == true)
+		gpiointr_release_pin(sc);
 	destroy_dev(sc->cdev);
-	gpio_pin_release(sc->pin);
 
 	return (0);
 }
@@ -195,22 +196,24 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 	switch (cmd) {
 	case GPIOINTRCONFIG:
 		bcopy(data, &intr_config, sizeof(intr_config));
-	        err = gpiointr_release_pin(sc);
-		if (err != 0) {
-			device_printf(sc->dev, "cannot release interrupt on pin %d\n", sc->pin->pin);
-			return (err);
+
+		if (sc->active == true) {
+			err = gpiointr_release_pin(sc);
+			if (err != 0)
+				return (err);
 		}
-		/*
-		 * Only the pin number gets updated. The bus of the pin remains the same as initially
-		 * specified in the DTB. The configuration flags are also not updated.
-		 */
+
+		/* Update pin */
 		sc->pin->pin = intr_config.gp_pin;
-		err = gpiointr_allocate_pin(sc);
+		err = GPIO_PIN_GETFLAGS(sc->pin->dev, sc->pin->pin, &sc->pin->flags);
 		if (err != 0) {
-			device_printf(sc->dev, "cannot set up interrupt on pin %d\n", sc->pin->pin);
+			device_printf(sc->dev, "cannot get flags of pin %d\n", sc->pin->pin);
 			return (err);
 		}
-		device_printf(sc->dev, "interrupt on pin %d (falling edge)\n", sc->pin->pin);
+
+		err = gpiointr_allocate_pin(sc);
+		if (err != 0)
+			return (err);
 		break;
 	default:
 		return (ENOTTY);
@@ -235,6 +238,6 @@ static driver_t gpiointr_driver = {
 
 static devclass_t gpiointr_devclass;
 
-DRIVER_MODULE(gpiointr, simplebus, gpiointr_driver, gpiointr_devclass, NULL, NULL);
+DRIVER_MODULE(gpiointr, gpio, gpiointr_driver, gpiointr_devclass, NULL, NULL);
 MODULE_VERSION(gpiointr, 1);
 MODULE_DEPEND(gpiointr, gpiobus, 1, 1, 1);

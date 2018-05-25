@@ -190,6 +190,12 @@ gpiobus_attach_bus(device_t dev)
 		device_delete_child(dev, busdev);
 		return (NULL);
 	}
+#ifdef INTRNG
+	if (device_add_child(dev, "gpiointr", -1) == NULL) {
+		device_delete_child(dev, busdev);
+		return (NULL);
+	}
+#endif
 #ifdef FDT
 	ofw_gpiobus_register_provider(dev);
 #endif
