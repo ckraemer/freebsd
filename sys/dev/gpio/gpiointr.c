@@ -143,6 +143,8 @@ gpiointr_detach(device_t dev)
 
 	if (sc->active == true)
 		gpiointr_release_pin(sc);
+	else
+		wakeup(sc);
 	destroy_dev(sc->cdev);
 
 	return (0);
@@ -177,10 +179,10 @@ gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag)
 	int err;
 
 	do {
-		err = tsleep(sc, PCATCH, "gpiointrwait", 20 * hz);
-		if (sc->active == false) {
-			err = EINTR;
-		}
+		if (sc->active == true)
+			err = tsleep(sc, PCATCH, "gpiointrwait", 20 * hz);
+		else
+			err = ENXIO;
 	} while (err == EWOULDBLOCK);
 
 	return (err);
