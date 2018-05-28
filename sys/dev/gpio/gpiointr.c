@@ -43,16 +43,7 @@ static struct cdevsw gpiointr_cdevsw = {
 static int
 gpiointr_allocate_pin(struct gpiointr_softc *sc)
 {
-	device_t busdev;
 	int err;
-
-	busdev = GPIO_GET_BUS(sc->pin->dev);
-	if (busdev == NULL)
-		return (ENODEV);
-
-	err = gpiobus_acquire_pin(busdev, sc->pin->pin);
-	if (err != 0)
-		return(EBUSY);
 
 	sc->intr_res = gpio_alloc_intr_resource(sc->pin->dev, &sc->intr_rid, RF_ACTIVE, sc->pin, GPIO_INTR_EDGE_FALLING);
 	if (sc->intr_res == NULL) {
@@ -76,19 +67,27 @@ gpiointr_allocate_pin(struct gpiointr_softc *sc)
 static int
 gpiointr_release_pin(struct gpiointr_softc *sc)
 {
-	device_t busdev;
+	int err;
 
+	err = 0;
 	sc->active = false;
 	wakeup(sc);
 
-	bus_teardown_intr(sc->pin->dev, sc->intr_res, sc->intr_cookie);
-	bus_release_resource(sc->pin->dev, SYS_RES_IRQ, sc->intr_rid, sc->intr_res);
+	if (sc->intr_cookie != NULL) {
+		err = bus_teardown_intr(sc->pin->dev, sc->intr_res, sc->intr_cookie);
+		if (err != 0)
+			device_printf(sc->dev, "cannot tear down interrupt\n");
+		else
+			sc->intr_cookie = NULL;
+	}
 
-	busdev = GPIO_GET_BUS(sc->pin->dev);
-	if (busdev == NULL)
-		return (ENODEV);
-
-	gpiobus_release_pin(busdev, sc->pin->pin);
+	if (sc->intr_res != NULL) {
+		err =  bus_release_resource(sc->pin->dev, SYS_RES_IRQ, sc->intr_rid, sc->intr_res);
+		if (err != 0)
+			device_printf(sc->dev, "cannot release interrupt resource\n");
+		else
+			sc->intr_res = NULL;
+	}
 
 	return (0);
 }
@@ -141,11 +140,12 @@ gpiointr_detach(device_t dev)
 
 	sc = device_get_softc(dev);
 
-	if (sc->active == true)
-		gpiointr_release_pin(sc);
-	else
-		wakeup(sc);
-	destroy_dev(sc->cdev);
+	gpiointr_release_pin(sc);
+
+	if (sc->cdev != NULL)
+		destroy_dev(sc->cdev);
+
+	free(sc->pin, M_DEVBUF);
 
 	return (0);
 }
@@ -214,8 +214,11 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 		}
 
 		err = gpiointr_allocate_pin(sc);
-		if (err != 0)
+		if (err != 0) {
+			gpiointr_release_pin(sc);
 			return (err);
+		}
+
 		break;
 	default:
 		return (ENOTTY);
