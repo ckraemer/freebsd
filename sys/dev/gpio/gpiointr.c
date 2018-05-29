@@ -43,9 +43,12 @@ static struct cdevsw gpiointr_cdevsw = {
 static int
 gpiointr_allocate_pin(struct gpiointr_softc *sc)
 {
+	uint32_t intr_mode;
 	int err;
 
-	sc->intr_res = gpio_alloc_intr_resource(sc->pin->dev, &sc->intr_rid, RF_ACTIVE, sc->pin, GPIO_INTR_EDGE_FALLING);
+	intr_mode = sc->pin->flags & GPIO_INTR_MASK;
+
+	sc->intr_res = gpio_alloc_intr_resource(sc->pin->dev, &sc->intr_rid, RF_ACTIVE, sc->pin, intr_mode);
 	if (sc->intr_res == NULL) {
 		device_printf(sc->dev, "cannot allocate interrupt resource\n");
 		return(ENXIO);
@@ -59,7 +62,7 @@ gpiointr_allocate_pin(struct gpiointr_softc *sc)
 
 	sc->active = true;
 
-	device_printf(sc->dev, "interrupt on %s pin %d (falling edge)\n", device_get_nameunit(sc->pin->dev), sc->pin->pin);
+	device_printf(sc->dev, "interrupt on %s pin %d (mode: %#010x)\n", device_get_nameunit(sc->pin->dev), sc->pin->pin, intr_mode);
 
 	return (0);
 }
@@ -212,6 +215,8 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 			device_printf(sc->dev, "cannot get flags of pin %d\n", sc->pin->pin);
 			return (err);
 		}
+		sc->pin->flags &= ~GPIO_INTR_MASK;
+		sc->pin->flags |= (intr_config.gp_intr_flags & GPIO_INTR_MASK);
 
 		err = gpiointr_allocate_pin(sc);
 		if (err != 0) {
