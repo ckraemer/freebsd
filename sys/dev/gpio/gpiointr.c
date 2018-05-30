@@ -2,6 +2,8 @@
 #include <sys/kernel.h>
 #include <sys/bus.h>
 #include <sys/module.h>
+#include <sys/poll.h>
+#include <sys/selinfo.h>
 #include <sys/gpio.h>
 #include <sys/conf.h>
 #include <sys/stat.h>
@@ -18,6 +20,8 @@ struct gpiointr_softc {
 	struct resource	*intr_res;
 	void		*intr_cookie;
 	struct cdev     *cdev;
+	struct selinfo	selinfo;
+	bool		intr_pending;
 	bool		active;
 };
 
@@ -31,13 +35,15 @@ static int	gpiointr_open(struct cdev*, int, int, struct thread*);
 static int	gpiointr_close(struct cdev*, int, int, struct thread*);
 static int	gpiointr_read(struct cdev*, struct uio*, int);
 static int	gpiointr_ioctl(struct cdev*, u_long, caddr_t, int, struct thread*);
+static int	gpiointr_poll(struct cdev *dev, int events, struct thread *td);
 
 static struct cdevsw gpiointr_cdevsw = {
 	.d_version = D_VERSION,
 	.d_open = gpiointr_open,
 	.d_close = gpiointr_close,
 	.d_read = gpiointr_read,
-	.d_ioctl = gpiointr_ioctl
+	.d_ioctl = gpiointr_ioctl,
+	.d_poll = gpiointr_poll
 };
 
 static int
@@ -75,6 +81,7 @@ gpiointr_release_pin(struct gpiointr_softc *sc)
 	err = 0;
 	sc->active = false;
 	wakeup(sc);
+	selwakeup(&sc->selinfo);
 
 	if (sc->intr_cookie != NULL) {
 		err = bus_teardown_intr(sc->pin->dev, sc->intr_res, sc->intr_cookie);
@@ -158,7 +165,13 @@ gpiointr_interrupt_handler(void *arg)
 {
 	struct gpiointr_softc *sc = arg;
 
-	wakeup(sc);
+	if (sc->active)
+	{
+		wakeup(sc);
+
+		sc->intr_pending = true;
+		selwakeup(&sc->selinfo);
+	}
 }
 
 static int
@@ -231,6 +244,31 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 
 	return (0);
 }
+
+static int
+gpiointr_poll(struct cdev *dev, int events, struct thread *td)
+{
+	struct gpiointr_softc *sc = dev->si_drv1;
+	int revents;
+
+	revents = 0;
+
+	if (sc->active == false) {
+		revents = POLLHUP;
+		sc->intr_pending = false;
+	} else if (events & (POLLIN | POLLRDNORM)) {
+		if (sc->intr_pending) {
+			revents |= POLLIN | POLLRDNORM;
+			sc->intr_pending = false;
+		}
+		else {
+			selrecord(td, &sc->selinfo);
+		}
+	}
+
+	return (revents);
+}
+
 
 static device_method_t gpiointr_methods[] = {
 	DEVMETHOD(device_probe,  gpiointr_probe),
