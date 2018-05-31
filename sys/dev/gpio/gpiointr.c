@@ -19,7 +19,7 @@ struct gpiointr_softc {
 	int		intr_rid;
 	struct resource	*intr_res;
 	void		*intr_cookie;
-	struct cdev     *cdev;
+	struct cdev	*cdev;
 	struct selinfo	selinfo;
 	bool		intr_pending;
 	bool		active;
@@ -57,7 +57,7 @@ gpiointr_allocate_pin(struct gpiointr_softc *sc)
 	sc->intr_res = gpio_alloc_intr_resource(sc->pin->dev, &sc->intr_rid, RF_ACTIVE, sc->pin, intr_mode);
 	if (sc->intr_res == NULL) {
 		device_printf(sc->dev, "cannot allocate interrupt resource\n");
-		return(ENXIO);
+		return (ENXIO);
 	}
 
 	err = bus_setup_intr(sc->pin->dev, sc->intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->intr_cookie);
@@ -92,7 +92,7 @@ gpiointr_release_pin(struct gpiointr_softc *sc)
 	}
 
 	if (sc->intr_res != NULL) {
-		err =  bus_release_resource(sc->pin->dev, SYS_RES_IRQ, sc->intr_rid, sc->intr_res);
+		err = bus_release_resource(sc->pin->dev, SYS_RES_IRQ, sc->intr_rid, sc->intr_res);
 		if (err != 0)
 			device_printf(sc->dev, "cannot release interrupt resource\n");
 		else
@@ -115,16 +115,16 @@ gpiointr_attach(device_t dev)
 {
 	struct gpiointr_softc *sc;
 	int err;
-	int unit;
+	const char *inst_name;
 	struct make_dev_args dev_args;
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
 
+	inst_name = device_get_nameunit(dev);
+
 	sc->pin = malloc(sizeof(struct gpiobus_pin), M_DEVBUF, M_WAITOK | M_ZERO);
 	sc->pin->dev = device_get_parent(dev);
-
-	unit = device_get_unit(dev);
 
 	make_dev_args_init(&dev_args);
 
@@ -134,9 +134,9 @@ gpiointr_attach(device_t dev)
 	dev_args.mda_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
 	dev_args.mda_si_drv1 = sc;
 
-	err = make_dev_s(&dev_args, &sc->cdev, "gpiointr%d", unit);
+	err = make_dev_s(&dev_args, &sc->cdev, "%s", inst_name);
 	if (err != 0) {
-		device_printf(dev, "cannot create gpiointr dev\n");
+		device_printf(dev, "cannot create device\n");
 		return (err);
 	}
 
