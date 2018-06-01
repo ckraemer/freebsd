@@ -273,10 +273,14 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 		sc->pins[intr_config.gp_pin].pin->flags &= ~GPIO_INTR_MASK;
 		sc->pins[intr_config.gp_pin].pin->flags |= (intr_config.gp_intr_flags & GPIO_INTR_MASK);
 
-		err = gpiointr_allocate_pin(sc, intr_config.gp_pin);
-		if (err != 0) {
-			gpiointr_release_pin(sc, intr_config.gp_pin);
-			return (err);
+		if ((sc->pins[intr_config.gp_pin].pin->flags & GPIO_INTR_MASK) != GPIO_INTR_NONE) {
+			err = gpiointr_allocate_pin(sc, intr_config.gp_pin);
+			if (err != 0) {
+				gpiointr_release_pin(sc, intr_config.gp_pin);
+				return (err);
+			}
+		} else {
+			device_printf(sc->dev, "interrupt on %s pin %d removed\n", device_get_nameunit(sc->pins[intr_config.gp_pin].pin->dev), intr_config.gp_pin);
 		}
 
 		break;
