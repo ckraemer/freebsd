@@ -13,20 +13,27 @@
 
 #include <dev/gpio/gpiobusvar.h>
 
-struct gpiointr_softc {
-	device_t	dev;
+struct gpiointr_pin {
+	bool		configured;
 	gpio_pin_t	pin;
 	int		intr_rid;
 	struct resource	*intr_res;
 	void		*intr_cookie;
-	struct cdev	*cdev;
-	struct selinfo	selinfo;
-	bool		intr_pending;
-	bool		active;
 };
 
-static int	gpiointr_allocate_pin(struct gpiointr_softc*);
-static int	gpiointr_release_pin(struct gpiointr_softc*);
+struct gpiointr_softc {
+	device_t		dev;
+	device_t		pdev;
+	struct cdev		*cdev;
+	int			npins;
+	struct gpiointr_pin	*pins;
+	struct selinfo		selinfo;
+	bool			intr_pending;
+	bool			active;
+};
+
+static int	gpiointr_allocate_pin(struct gpiointr_softc*, int);
+static int	gpiointr_release_pin(struct gpiointr_softc*, int);
 static int	gpiointr_probe(device_t);
 static int	gpiointr_attach(device_t);
 static int	gpiointr_detach(device_t);
@@ -47,56 +54,71 @@ static struct cdevsw gpiointr_cdevsw = {
 };
 
 static int
-gpiointr_allocate_pin(struct gpiointr_softc *sc)
+gpiointr_allocate_pin(struct gpiointr_softc *sc, int pinnumber)
 {
 	uint32_t intr_mode;
 	int err;
 
-	intr_mode = sc->pin->flags & GPIO_INTR_MASK;
+	intr_mode = sc->pins[pinnumber].pin->flags & GPIO_INTR_MASK;
 
-	sc->intr_res = gpio_alloc_intr_resource(sc->pin->dev, &sc->intr_rid, RF_ACTIVE, sc->pin, intr_mode);
-	if (sc->intr_res == NULL) {
+	sc->pins[pinnumber].intr_res = gpio_alloc_intr_resource(sc->pins[pinnumber].pin->dev, &sc->pins[pinnumber].intr_rid, RF_ACTIVE, sc->pins[pinnumber].pin, intr_mode);
+	if (sc->pins[pinnumber].intr_res == NULL) {
 		device_printf(sc->dev, "cannot allocate interrupt resource\n");
 		return (ENXIO);
 	}
 
-	err = bus_setup_intr(sc->pin->dev, sc->intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->intr_cookie);
+	err = bus_setup_intr(sc->pins[pinnumber].pin->dev, sc->pins[pinnumber].intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->pins[pinnumber].intr_cookie);
 	if (err != 0) {
 		device_printf(sc->dev, "cannot set up interrupt\n");
 		return (err);
 	}
 
+	sc->pins[pinnumber].configured = true;
 	sc->active = true;
 
-	device_printf(sc->dev, "interrupt on %s pin %d (mode: %#010x)\n", device_get_nameunit(sc->pin->dev), sc->pin->pin, intr_mode);
+	device_printf(sc->dev, "interrupt on %s pin %d (mode: %#010x)\n", device_get_nameunit(sc->pins[pinnumber].pin->dev), sc->pins[pinnumber].pin->pin, intr_mode);
 
 	return (0);
 }
 
 static int
-gpiointr_release_pin(struct gpiointr_softc *sc)
+gpiointr_release_pin(struct gpiointr_softc *sc, int pinnumber)
 {
 	int err;
 
 	err = 0;
-	sc->active = false;
-	wakeup(sc);
-	selwakeup(&sc->selinfo);
 
-	if (sc->intr_cookie != NULL) {
-		err = bus_teardown_intr(sc->pin->dev, sc->intr_res, sc->intr_cookie);
+	sc->pins[pinnumber].configured = false;
+
+	/* Mark driver only as inactive when no pin is configured anymore */
+	sc->active = false;
+	for (int i = 0; i <= sc->npins; i++) {
+		if (sc->pins[i].configured) {
+			sc->active = true;
+		}
+	}
+
+	/* Make pending IO syscalls return when no more pins are configured */
+	if (!sc->active) {
+		wakeup(sc);
+		selwakeup(&sc->selinfo);
+	}
+
+
+	if (sc->pins[pinnumber].intr_cookie != NULL) {
+		err = bus_teardown_intr(sc->pins[pinnumber].pin->dev, sc->pins[pinnumber].intr_res, sc->pins[pinnumber].intr_cookie);
 		if (err != 0)
 			device_printf(sc->dev, "cannot tear down interrupt\n");
 		else
-			sc->intr_cookie = NULL;
+			sc->pins[pinnumber].intr_cookie = NULL;
 	}
 
-	if (sc->intr_res != NULL) {
-		err = bus_release_resource(sc->pin->dev, SYS_RES_IRQ, sc->intr_rid, sc->intr_res);
+	if (sc->pins[pinnumber].intr_res != NULL) {
+		err = bus_release_resource(sc->pins[pinnumber].pin->dev, SYS_RES_IRQ, sc->pins[pinnumber].intr_rid, sc->pins[pinnumber].intr_res);
 		if (err != 0)
 			device_printf(sc->dev, "cannot release interrupt resource\n");
 		else
-			sc->intr_res = NULL;
+			sc->pins[pinnumber].intr_res = NULL;
 	}
 
 	return (0);
@@ -120,11 +142,23 @@ gpiointr_attach(device_t dev)
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
+	sc->pdev = device_get_parent(dev);
 
 	inst_name = device_get_nameunit(dev);
 
-	sc->pin = malloc(sizeof(struct gpiobus_pin), M_DEVBUF, M_WAITOK | M_ZERO);
-	sc->pin->dev = device_get_parent(dev);
+	err = GPIO_PIN_MAX(sc->pdev, &sc->npins);
+	if (err != 0) {
+		device_printf(dev, "cannot get number of pins\n");
+		return (err);
+	}
+
+	sc->pins = malloc(sizeof(struct gpiointr_pin) * sc->npins, M_DEVBUF, M_WAITOK | M_ZERO);
+
+	for (int i = 0; i <= sc->npins; i++) {
+		sc->pins[i].pin = malloc(sizeof(struct gpiobus_pin), M_DEVBUF, M_WAITOK | M_ZERO);
+		sc->pins[i].pin->pin = i;
+		sc->pins[i].pin->dev = sc->pdev;
+	}
 
 	make_dev_args_init(&dev_args);
 
@@ -150,12 +184,16 @@ gpiointr_detach(device_t dev)
 
 	sc = device_get_softc(dev);
 
-	gpiointr_release_pin(sc);
+	for (int i = 0; i <= sc->npins; i++)
+		gpiointr_release_pin(sc, i);
 
 	if (sc->cdev != NULL)
 		destroy_dev(sc->cdev);
 
-	free(sc->pin, M_DEVBUF);
+	for (int i = 0; i <= sc->npins; i++)
+		free(sc->pins[i].pin, M_DEVBUF);
+
+	free(sc->pins, M_DEVBUF);
 
 	return (0);
 }
@@ -215,25 +253,29 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 	case GPIOINTRCONFIG:
 		bcopy(data, &intr_config, sizeof(intr_config));
 
-		if (sc->active == true) {
-			err = gpiointr_release_pin(sc);
+		if (intr_config.gp_pin < 0 || intr_config.gp_pin > sc->npins) {
+			device_printf(sc->dev, "invalid pin %d\n", intr_config.gp_pin);
+			return EINVAL;
+		}
+
+		if (sc->pins[intr_config.gp_pin].configured == true) {
+			err = gpiointr_release_pin(sc, intr_config.gp_pin);
 			if (err != 0)
 				return (err);
 		}
 
 		/* Update pin */
-		sc->pin->pin = intr_config.gp_pin;
-		err = GPIO_PIN_GETFLAGS(sc->pin->dev, sc->pin->pin, &sc->pin->flags);
+		err = GPIO_PIN_GETFLAGS(sc->pins[intr_config.gp_pin].pin->dev, sc->pins[intr_config.gp_pin].pin->pin, &sc->pins[intr_config.gp_pin].pin->flags);
 		if (err != 0) {
-			device_printf(sc->dev, "cannot get flags of pin %d\n", sc->pin->pin);
+			device_printf(sc->dev, "cannot get flags of pin %d\n", intr_config.gp_pin);
 			return (err);
 		}
-		sc->pin->flags &= ~GPIO_INTR_MASK;
-		sc->pin->flags |= (intr_config.gp_intr_flags & GPIO_INTR_MASK);
+		sc->pins[intr_config.gp_pin].pin->flags &= ~GPIO_INTR_MASK;
+		sc->pins[intr_config.gp_pin].pin->flags |= (intr_config.gp_intr_flags & GPIO_INTR_MASK);
 
-		err = gpiointr_allocate_pin(sc);
+		err = gpiointr_allocate_pin(sc, intr_config.gp_pin);
 		if (err != 0) {
-			gpiointr_release_pin(sc);
+			gpiointr_release_pin(sc, intr_config.gp_pin);
 			return (err);
 		}
 
