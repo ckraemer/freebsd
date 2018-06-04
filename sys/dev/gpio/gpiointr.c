@@ -32,17 +32,18 @@ struct gpiointr_softc {
 	bool			active;
 };
 
-static int	gpiointr_allocate_pin(struct gpiointr_softc*, int);
-static int	gpiointr_release_pin(struct gpiointr_softc*, int);
-static int	gpiointr_probe(device_t);
-static int	gpiointr_attach(device_t);
-static int	gpiointr_detach(device_t);
-static void	gpiointr_interrupt_handler(void*);
-static int	gpiointr_open(struct cdev*, int, int, struct thread*);
-static int	gpiointr_close(struct cdev*, int, int, struct thread*);
-static int	gpiointr_read(struct cdev*, struct uio*, int);
-static int	gpiointr_ioctl(struct cdev*, u_long, caddr_t, int, struct thread*);
-static int	gpiointr_poll(struct cdev *dev, int events, struct thread *td);
+static const char*	gpiointr_intr_mode_to_str(uint32_t);
+static int		gpiointr_allocate_pin(struct gpiointr_softc*, int);
+static int		gpiointr_release_pin(struct gpiointr_softc*, int);
+static int		gpiointr_probe(device_t);
+static int		gpiointr_attach(device_t);
+static int		gpiointr_detach(device_t);
+static void		gpiointr_interrupt_handler(void*);
+static int		gpiointr_open(struct cdev*, int, int, struct thread*);
+static int		gpiointr_close(struct cdev*, int, int, struct thread*);
+static int		gpiointr_read(struct cdev*, struct uio*, int);
+static int		gpiointr_ioctl(struct cdev*, u_long, caddr_t, int, struct thread*);
+static int		gpiointr_poll(struct cdev *dev, int events, struct thread *td);
 
 static struct cdevsw gpiointr_cdevsw = {
 	.d_version = D_VERSION,
@@ -52,6 +53,25 @@ static struct cdevsw gpiointr_cdevsw = {
 	.d_ioctl = gpiointr_ioctl,
 	.d_poll = gpiointr_poll
 };
+
+static const char*
+gpiointr_intr_mode_to_str(uint32_t intr_mode)
+{
+	switch (intr_mode) {
+	case GPIO_INTR_LEVEL_LOW:
+		return "low level";
+	case GPIO_INTR_LEVEL_HIGH:
+		return "high level";
+	case GPIO_INTR_EDGE_RISING:
+		return "rising edge";
+	case GPIO_INTR_EDGE_FALLING:
+		return "falling edge";
+	case GPIO_INTR_EDGE_BOTH:
+		return "both edges";
+	default:
+		return "invalid mode";
+	}
+}
 
 static int
 gpiointr_allocate_pin(struct gpiointr_softc *sc, int pinnumber)
@@ -76,7 +96,7 @@ gpiointr_allocate_pin(struct gpiointr_softc *sc, int pinnumber)
 	sc->pins[pinnumber].configured = true;
 	sc->active = true;
 
-	device_printf(sc->dev, "interrupt on %s pin %d (mode: %#010x)\n", device_get_nameunit(sc->pins[pinnumber].pin->dev), sc->pins[pinnumber].pin->pin, intr_mode);
+	device_printf(sc->dev, "interrupt on %s pin %d (%s)\n", device_get_nameunit(sc->pins[pinnumber].pin->dev), sc->pins[pinnumber].pin->pin, gpiointr_intr_mode_to_str(intr_mode));
 
 	return (0);
 }
