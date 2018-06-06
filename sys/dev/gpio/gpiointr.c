@@ -32,6 +32,8 @@ struct gpiointr_softc {
 	bool			active;
 };
 
+static MALLOC_DEFINE(M_GPIOINTR, "gpiointr", "gpiointr device data");
+
 static const char*	gpiointr_intr_mode_to_str(uint32_t);
 static int		gpiointr_allocate_pin(struct gpiointr_softc*, int);
 static int		gpiointr_release_pin(struct gpiointr_softc*, int);
@@ -172,10 +174,10 @@ gpiointr_attach(device_t dev)
 		return (err);
 	}
 
-	sc->pins = malloc(sizeof(struct gpiointr_pin) * sc->npins, M_DEVBUF, M_WAITOK | M_ZERO);
+	sc->pins = malloc(sizeof(struct gpiointr_pin) * sc->npins, M_GPIOINTR, M_WAITOK | M_ZERO);
 
 	for (int i = 0; i <= sc->npins; i++) {
-		sc->pins[i].pin = malloc(sizeof(struct gpiobus_pin), M_DEVBUF, M_WAITOK | M_ZERO);
+		sc->pins[i].pin = malloc(sizeof(struct gpiobus_pin), M_GPIOINTR, M_WAITOK | M_ZERO);
 		sc->pins[i].pin->pin = i;
 		sc->pins[i].pin->dev = sc->pdev;
 	}
@@ -211,9 +213,9 @@ gpiointr_detach(device_t dev)
 		destroy_dev(sc->cdev);
 
 	for (int i = 0; i <= sc->npins; i++)
-		free(sc->pins[i].pin, M_DEVBUF);
+		free(sc->pins[i].pin, M_GPIOINTR);
 
-	free(sc->pins, M_DEVBUF);
+	free(sc->pins, M_GPIOINTR);
 
 	return (0);
 }
