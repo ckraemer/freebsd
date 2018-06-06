@@ -32,6 +32,9 @@ struct gpiointr_softc {
 	bool			active;
 };
 
+struct gpiointr_cdevpriv {
+};
+
 static MALLOC_DEFINE(M_GPIOINTR, "gpiointr", "gpiointr device data");
 
 static const char*	gpiointr_intr_mode_to_str(uint32_t);
@@ -41,6 +44,7 @@ static int		gpiointr_probe(device_t);
 static int		gpiointr_attach(device_t);
 static int		gpiointr_detach(device_t);
 static void		gpiointr_interrupt_handler(void*);
+static void		gpiointr_cdevpriv_dtor(void*);
 static int		gpiointr_open(struct cdev*, int, int, struct thread*);
 static int		gpiointr_close(struct cdev*, int, int, struct thread*);
 static int		gpiointr_read(struct cdev*, struct uio*, int);
@@ -234,11 +238,26 @@ gpiointr_interrupt_handler(void *arg)
 	}
 }
 
+static void
+gpiointr_cdevpriv_dtor(void *data)
+{
+
+	free(data, M_GPIOINTR);
+}
+
 static int
 gpiointr_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 {
+	struct gpiointr_cdevpriv *priv;
+	int err;
 
-	return (0);
+	priv = malloc(sizeof(*priv), M_GPIOINTR,  M_WAITOK | M_ZERO);
+
+	err = devfs_set_cdevpriv(priv, gpiointr_cdevpriv_dtor);
+	if (err != 0)
+		gpiointr_cdevpriv_dtor(priv);
+
+	return (err);
 }
 
 static int
