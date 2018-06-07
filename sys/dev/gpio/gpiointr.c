@@ -25,14 +25,17 @@ struct gpiointr_softc {
 	device_t		dev;
 	device_t		pdev;
 	struct cdev		*cdev;
+	struct mtx		mtx;
 	int			npins;
 	struct gpiointr_pin	*pins;
 	struct selinfo		selinfo;
-	bool			intr_pending;
+	bool			intr_toogle;
 	bool			active;
 };
 
 struct gpiointr_cdevpriv {
+	bool poll_en;
+	bool intr_toogle;
 };
 
 static MALLOC_DEFINE(M_GPIOINTR, "gpiointr", "gpiointr device data");
@@ -172,6 +175,8 @@ gpiointr_attach(device_t dev)
 
 	inst_name = device_get_nameunit(dev);
 
+	mtx_init(&sc->mtx, inst_name, NULL, MTX_DEF);
+
 	err = GPIO_PIN_MAX(sc->pdev, &sc->npins);
 	if (err != 0) {
 		device_printf(dev, "cannot get number of pins\n");
@@ -221,6 +226,8 @@ gpiointr_detach(device_t dev)
 
 	free(sc->pins, M_GPIOINTR);
 
+	mtx_destroy(&sc->mtx);
+
 	return (0);
 }
 
@@ -231,10 +238,14 @@ gpiointr_interrupt_handler(void *arg)
 
 	if (sc->active)
 	{
+		mtx_lock(&sc->mtx);
+
 		wakeup(sc);
 
-		sc->intr_pending = true;
+		sc->intr_toogle = !sc->intr_toogle;
 		selwakeup(&sc->selinfo);
+
+		mtx_unlock(&sc->mtx);
 	}
 }
 
@@ -336,22 +347,40 @@ static int
 gpiointr_poll(struct cdev *dev, int events, struct thread *td)
 {
 	struct gpiointr_softc *sc = dev->si_drv1;
+	struct gpiointr_cdevpriv *priv;
+	int err;
 	int revents;
 
 	revents = 0;
 
+	err = devfs_get_cdevpriv((void **)&priv);
+	if (err != 0) {
+		revents = POLLERR;
+		return (revents);
+	}
+
 	if (sc->active == false) {
 		revents = POLLHUP;
-		sc->intr_pending = false;
-	} else if (events & (POLLIN | POLLRDNORM)) {
-		if (sc->intr_pending) {
+		priv->poll_en = false;
+		return (revents);
+	}
+
+	mtx_lock(&sc->mtx);
+
+	if (events & (POLLIN | POLLRDNORM)) {
+		if (priv->poll_en && (sc->intr_toogle != priv->intr_toogle)) {
 			revents |= POLLIN | POLLRDNORM;
-			sc->intr_pending = false;
-		}
-		else {
+			priv->poll_en = false;
+		} else if (priv->poll_en && (sc->intr_toogle == priv->intr_toogle)) {
+			selrecord(td, &sc->selinfo);
+		} else {
+			priv->poll_en = true;
+			priv->intr_toogle = sc->intr_toogle;
 			selrecord(td, &sc->selinfo);
 		}
 	}
+
+	mtx_unlock(&sc->mtx);
 
 	return (revents);
 }
