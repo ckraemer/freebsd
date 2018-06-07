@@ -133,7 +133,6 @@ gpiointr_release_pin(struct gpiointr_softc *sc, int pinnumber)
 		selwakeup(&sc->selinfo);
 	}
 
-
 	if (sc->pins[pinnumber].intr_cookie != NULL) {
 		err = bus_teardown_intr(sc->pins[pinnumber].pin->dev, sc->pins[pinnumber].intr_res, sc->pins[pinnumber].intr_cookie);
 		if (err != 0)
@@ -302,12 +301,13 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 	int err;
 
 	switch (cmd) {
+			return (ENXIO);
 	case GPIOINTRCONFIG:
 		bcopy(data, &intr_config, sizeof(intr_config));
 
 		if (intr_config.gp_pin < 0 || intr_config.gp_pin > sc->npins) {
 			device_printf(sc->dev, "invalid pin %d\n", intr_config.gp_pin);
-			return EINVAL;
+			return (EINVAL);
 		}
 
 		if (sc->pins[intr_config.gp_pin].configured == true) {
