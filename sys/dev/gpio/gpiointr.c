@@ -301,8 +301,29 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 	int err;
 
 	switch (cmd) {
+
+	case GPIOINTRGETCONFIG:
+
+		bcopy(data, &intr_config, sizeof(intr_config));
+
+		if (intr_config.gp_pin < 0 || intr_config.gp_pin > sc->npins) {
+			device_printf(sc->dev, "invalid pin %d\n", intr_config.gp_pin);
+			return (EINVAL);
+		}
+
+		if (sc->pins[intr_config.gp_pin].configured == false) {
+			device_printf(sc->dev, "pin %d is not configured\n", intr_config.gp_pin);
 			return (ENXIO);
-	case GPIOINTRCONFIG:
+		}
+
+		intr_config.gp_intr_flags = sc->pins[intr_config.gp_pin].pin->flags & GPIO_INTR_MASK;
+
+		bcopy(&intr_config, data, sizeof(intr_config));
+
+		break;
+
+	case GPIOINTRSETCONFIG:
+
 		bcopy(data, &intr_config, sizeof(intr_config));
 
 		if (intr_config.gp_pin < 0 || intr_config.gp_pin > sc->npins) {
@@ -336,8 +357,11 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 		}
 
 		break;
+
 	default:
+
 		return (ENOTTY);
+
 	}
 
 	return (0);
