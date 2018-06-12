@@ -48,11 +48,12 @@ static int		gpiointr_attach(device_t);
 static int		gpiointr_detach(device_t);
 static void		gpiointr_interrupt_handler(void*);
 static void		gpiointr_cdevpriv_dtor(void*);
-static int		gpiointr_open(struct cdev*, int, int, struct thread*);
-static int		gpiointr_close(struct cdev*, int, int, struct thread*);
-static int		gpiointr_read(struct cdev*, struct uio*, int);
-static int		gpiointr_ioctl(struct cdev*, u_long, caddr_t, int, struct thread*);
-static int		gpiointr_poll(struct cdev *dev, int events, struct thread *td);
+
+static d_open_t		gpiointr_open;
+static d_close_t	gpiointr_close;
+static d_read_t		gpiointr_read;
+static d_ioctl_t	gpiointr_ioctl;
+static d_poll_t		gpiointr_poll;
 
 static struct cdevsw gpiointr_cdevsw = {
 	.d_version = D_VERSION,
