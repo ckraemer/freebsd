@@ -34,8 +34,10 @@ struct gpiointr_softc {
 };
 
 struct gpiointr_cdevpriv {
+	struct gpiointr_softc *sc;
 	bool poll_en;
 	bool intr_toogle;
+	bool kq_stale;
 };
 
 static MALLOC_DEFINE(M_GPIOINTR, "gpiointr", "gpiointr device data");
@@ -54,6 +56,10 @@ static d_close_t	gpiointr_close;
 static d_read_t		gpiointr_read;
 static d_ioctl_t	gpiointr_ioctl;
 static d_poll_t		gpiointr_poll;
+static d_kqfilter_t	gpiointr_kqfilter;
+
+static int		gpiointr_kqread(struct knote*, long);
+static void		gpiointr_kqdetach(struct knote*);
 
 static struct cdevsw gpiointr_cdevsw = {
 	.d_version = D_VERSION,
@@ -61,7 +67,16 @@ static struct cdevsw gpiointr_cdevsw = {
 	.d_close = gpiointr_close,
 	.d_read = gpiointr_read,
 	.d_ioctl = gpiointr_ioctl,
-	.d_poll = gpiointr_poll
+	.d_poll = gpiointr_poll,
+	.d_kqfilter = gpiointr_kqfilter
+};
+
+static struct filterops gpiointr_read_filterops = {
+	.f_isfd =	true,
+	.f_attach =	NULL,
+	.f_detach =	gpiointr_kqdetach,
+	.f_event =	gpiointr_kqread,
+	.f_touch =	NULL
 };
 
 static const char*
@@ -131,6 +146,7 @@ gpiointr_release_pin(struct gpiointr_softc *sc, int pinnumber)
 	/* Make pending IO syscalls return when no more pins are configured */
 	if (!sc->active) {
 		wakeup(sc);
+		KNOTE_UNLOCKED(&sc->selinfo.si_note, 0);
 		selwakeup(&sc->selinfo);
 	}
 
@@ -176,6 +192,8 @@ gpiointr_attach(device_t dev)
 	inst_name = device_get_nameunit(dev);
 
 	mtx_init(&sc->mtx, inst_name, NULL, MTX_DEF);
+
+	knlist_init_mtx(&sc->selinfo.si_note, &sc->mtx);
 
 	err = GPIO_PIN_MAX(sc->pdev, &sc->npins);
 	if (err != 0) {
@@ -226,6 +244,9 @@ gpiointr_detach(device_t dev)
 
 	free(sc->pins, M_GPIOINTR);
 
+	knlist_clear(&sc->selinfo.si_note, 0);
+	knlist_destroy(&sc->selinfo.si_note);
+
 	mtx_destroy(&sc->mtx);
 
 	return (0);
@@ -244,6 +265,8 @@ gpiointr_interrupt_handler(void *arg)
 
 		sc->intr_toogle = !sc->intr_toogle;
 		selwakeup(&sc->selinfo);
+
+		KNOTE_LOCKED(&sc->selinfo.si_note, 1);
 
 		mtx_unlock(&sc->mtx);
 	}
@@ -267,6 +290,7 @@ gpiointr_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 	err = devfs_set_cdevpriv(priv, gpiointr_cdevpriv_dtor);
 	if (err != 0)
 		gpiointr_cdevpriv_dtor(priv);
+	priv->sc = dev->si_drv1;
 
 	return (err);
 }
@@ -410,6 +434,68 @@ gpiointr_poll(struct cdev *dev, int events, struct thread *td)
 	return (revents);
 }
 
+static int
+gpiointr_kqfilter(struct cdev *dev, struct knote *kn)
+{
+        struct gpiointr_softc *sc = dev->si_drv1;
+	struct gpiointr_cdevpriv *priv;
+	struct knlist *knlist;
+	int err;
+
+	err = devfs_get_cdevpriv((void **)&priv);
+	if (err != 0)
+		return err;
+
+	if (sc->active == false)
+		return (ENXIO);
+
+	switch(kn->kn_filter) {
+	case EVFILT_READ:
+		kn->kn_fop = &gpiointr_read_filterops;
+		kn->kn_hook = (void *)priv;
+		break;
+	default:
+		return (EOPNOTSUPP);
+	}
+
+	knlist = &sc->selinfo.si_note;
+	knlist_add(knlist, kn, 0);
+
+	return (0);
+}
+
+static int
+gpiointr_kqread(struct knote *kn, long hint)
+{
+	struct gpiointr_cdevpriv *priv = kn->kn_hook;
+	struct gpiointr_softc *sc = priv->sc;
+
+	if (sc->active == false) {
+		kn->kn_flags |= EV_EOF;
+		return (1);
+	} else {
+		if (hint != 0) {
+			priv->kq_stale = true;
+			return (1);
+		}
+		else if (priv->kq_stale == true) {
+			priv->kq_stale = false;
+			return (1);
+		}
+	}
+
+	return (0);
+}
+
+static void
+gpiointr_kqdetach(struct knote *kn)
+{
+	struct gpiointr_cdevpriv *priv = kn->kn_hook;
+	struct gpiointr_softc *sc = priv->sc;
+	struct knlist *knlist = &sc->selinfo.si_note;
+
+	knlist_remove(knlist, kn, 0);
+}
 
 static device_method_t gpiointr_methods[] = {
 	DEVMETHOD(device_probe,  gpiointr_probe),
