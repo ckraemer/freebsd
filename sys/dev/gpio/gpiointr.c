@@ -31,6 +31,7 @@ struct gpiointr_softc {
 	struct selinfo		selinfo;
 	bool			intr_toogle;
 	bool			active;
+	unsigned int		counter;
 };
 
 struct gpiointr_cdevpriv {
@@ -268,6 +269,10 @@ gpiointr_interrupt_handler(void *arg)
 
 		KNOTE_LOCKED(&sc->selinfo.si_note, 1);
 
+		sc->counter++;
+		if (sc->counter == 0u)
+			device_printf(sc->dev, "interrupt counter overflow\n");
+
 		mtx_unlock(&sc->mtx);
 	}
 }
@@ -323,6 +328,7 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 {
 	struct gpiointr_softc *sc = dev->si_drv1;
 	struct gpio_intr_config intr_config;
+	unsigned int counter;
 	int err;
 
 	switch (cmd) {
@@ -380,6 +386,21 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 		} else {
 			device_printf(sc->dev, "interrupt on %s pin %d removed\n", device_get_nameunit(sc->pins[intr_config.gp_pin].pin->dev), intr_config.gp_pin);
 		}
+
+		break;
+
+	case GPIOINTRRESETCOUNTER:
+
+		mtx_lock(&sc->mtx);
+		sc->counter = 0u;
+		mtx_unlock(&sc->mtx);
+
+		break;
+
+	case GPIOINTRGETCOUNTER:
+
+		counter = sc->counter;
+		bcopy(&counter, data, sizeof(counter));
 
 		break;
 
