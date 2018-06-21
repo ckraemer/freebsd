@@ -256,7 +256,9 @@ gpiointr_detach(device_t dev)
 static void
 gpiointr_interrupt_handler(void *arg)
 {
-	struct gpiointr_softc *sc = arg;
+	struct gpiointr_softc *sc;
+
+	sc = arg;
 
 	if (sc->active)
 	{
@@ -310,8 +312,10 @@ gpiointr_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
 static int
 gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag)
 {
-	struct gpiointr_softc *sc = dev->si_drv1;
+	struct gpiointr_softc *sc;
 	int err;
+
+	sc = dev->si_drv1;
 
 	do {
 		if (sc->active == true)
@@ -326,10 +330,12 @@ gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag)
 static int
 gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td)
 {
-	struct gpiointr_softc *sc = dev->si_drv1;
+	struct gpiointr_softc *sc;
 	struct gpio_intr_config intr_config;
 	unsigned int counter;
 	int err;
+
+	sc = dev->si_drv1;
 
 	switch (cmd) {
 
@@ -416,10 +422,12 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 static int
 gpiointr_poll(struct cdev *dev, int events, struct thread *td)
 {
-	struct gpiointr_softc *sc = dev->si_drv1;
+	struct gpiointr_softc *sc;
 	struct gpiointr_cdevpriv *priv;
 	int err;
 	int revents;
+
+	sc = dev->si_drv1;
 
 	revents = 0;
 
@@ -458,10 +466,12 @@ gpiointr_poll(struct cdev *dev, int events, struct thread *td)
 static int
 gpiointr_kqfilter(struct cdev *dev, struct knote *kn)
 {
-        struct gpiointr_softc *sc = dev->si_drv1;
+	struct gpiointr_softc *sc;
 	struct gpiointr_cdevpriv *priv;
 	struct knlist *knlist;
 	int err;
+
+	sc = dev->si_drv1;
 
 	err = devfs_get_cdevpriv((void **)&priv);
 	if (err != 0)
@@ -488,8 +498,11 @@ gpiointr_kqfilter(struct cdev *dev, struct knote *kn)
 static int
 gpiointr_kqread(struct knote *kn, long hint)
 {
-	struct gpiointr_cdevpriv *priv = kn->kn_hook;
-	struct gpiointr_softc *sc = priv->sc;
+	struct gpiointr_cdevpriv *priv;
+	struct gpiointr_softc *sc;
+
+	priv = kn->kn_hook;
+	sc = priv->sc;
 
 	if (sc->active == false) {
 		kn->kn_flags |= EV_EOF;
@@ -511,9 +524,13 @@ gpiointr_kqread(struct knote *kn, long hint)
 static void
 gpiointr_kqdetach(struct knote *kn)
 {
-	struct gpiointr_cdevpriv *priv = kn->kn_hook;
-	struct gpiointr_softc *sc = priv->sc;
-	struct knlist *knlist = &sc->selinfo.si_note;
+	struct gpiointr_cdevpriv *priv;
+	struct gpiointr_softc *sc;
+	struct knlist *knlist;
+
+	priv = kn->kn_hook;
+	sc = priv->sc;
+	knlist = &sc->selinfo.si_note;
 
 	knlist_remove(knlist, kn, 0);
 }
