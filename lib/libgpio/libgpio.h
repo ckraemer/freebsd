@@ -35,6 +35,7 @@ __BEGIN_DECLS
 
 #define	GPIO_INVALID_HANDLE -1
 typedef int gpio_handle_t;
+typedef int gpio_intr_handle_t;
 typedef uint32_t gpio_pin_t;
 
 /*
@@ -54,11 +55,25 @@ typedef enum {
 } gpio_value_t;
 
 /*
+ * Structure describing the interrupt configuration of a GPIO pin.
+ */
+typedef struct {
+	gpio_pin_t	g_pin;
+	uint32_t	g_intr_flags;
+} gpio_intr_config_t;
+
+/*
  * Open /dev/gpiocN or a specific device.
  */
 gpio_handle_t	gpio_open(unsigned int);
 gpio_handle_t	gpio_open_device(const char *);
 void		gpio_close(gpio_handle_t);
+/*
+ * Open /dev/gpiointrN or a specific device.
+ */
+gpio_intr_handle_t	gpio_intr_open(unsigned int);
+gpio_intr_handle_t	gpio_intr_open_device(const char *);
+void			gpio_intr_close(gpio_intr_handle_t);
 /*
  * Get a list of all the GPIO pins.
  */
@@ -71,6 +86,13 @@ int		gpio_pin_list(gpio_handle_t, gpio_config_t **);
  */
 int		gpio_pin_config(gpio_handle_t, gpio_config_t *);
 /*
+ * GPIO pin interrupt configuration.
+ *
+ * Retrieve the interrupt configuration of a specific GPIO pin. The pin
+ * number is passed through the gpio_intr_config_t structure.
+ */
+int		gpio_intr_pin_config(gpio_intr_handle_t, gpio_intr_config_t *);
+/*
  * Sets the GPIO pin name.  The pin number and pin name to be set are passed
  * as parameters.
  */
@@ -80,6 +102,12 @@ int		gpio_pin_set_name(gpio_handle_t, gpio_pin_t, char *);
  * to be set are passed through the gpio_config_t structure.
  */
 int		gpio_pin_set_flags(gpio_handle_t, gpio_config_t *);
+/*
+ * Sets the GPIO interrupt configuration flags on a specific GPIO pin.
+ * The pin number and the flags to be set are passed through the
+ * gpio_intr_config_t structure.
+ */
+int		gpio_intr_pin_set_flags(gpio_intr_handle_t, gpio_intr_config_t *);
 /*
  * GPIO pin values.
  */
