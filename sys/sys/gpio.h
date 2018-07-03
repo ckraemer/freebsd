@@ -182,7 +182,7 @@ struct gpio_config_32 {
 #define	GPIOACCESS32		_IOWR('G', 7, struct gpio_access_32)
 #define	GPIOCONFIG32		_IOW('G', 8, struct gpio_config_32)
 #define	GPIOINTRSETCONFIG	_IOW('G', 9, struct gpio_intr_config)
-#define	GPIOINTRGETCONFIG	_IOWR('G', 10, struct gpio_intr_config)
+#define	GPIOINTRGETCONFIG	_IOR('G', 10, struct gpio_intr_config)
 #define	GPIOINTRRESETCOUNTER	_IO('G', 11)
 #define	GPIOINTRGETCOUNTER	_IOWR('G', 12, unsigned int)
 

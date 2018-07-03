@@ -19,6 +19,7 @@ struct gpiointr_pin {
 	int		intr_rid;
 	struct resource	*intr_res;
 	void		*intr_cookie;
+	bool		intr_toogle;
 };
 
 struct gpiointr_softc {
@@ -28,24 +29,25 @@ struct gpiointr_softc {
 	struct mtx		mtx;
 	int			npins;
 	struct gpiointr_pin	*pins;
-	struct selinfo		selinfo;
-	bool			intr_toogle;
 	bool			active;
-	unsigned int		counter;
 };
 
 struct gpiointr_cdevpriv {
-	struct gpiointr_softc *sc;
-	bool poll_en;
-	bool intr_toogle;
-	bool kq_stale;
+	struct gpiointr_softc	*sc;
+	struct gpiointr_pin	*pin;
+	struct selinfo		selinfo;
+	struct mtx		mtx;
+	unsigned int		counter;
+	bool			poll_en;
+	bool			intr_toogle;
+	bool			kq_stale;
 };
 
 static MALLOC_DEFINE(M_GPIOINTR, "gpiointr", "gpiointr device data");
 
 static const char*	gpiointr_intr_mode_to_str(uint32_t);
-static int		gpiointr_allocate_pin(struct gpiointr_softc*, int);
-static int		gpiointr_release_pin(struct gpiointr_softc*, int);
+static int		gpiointr_allocate_pin(struct gpiointr_cdevpriv*);
+static int		gpiointr_release_pin(struct gpiointr_cdevpriv*);
 static int		gpiointr_probe(device_t);
 static int		gpiointr_attach(device_t);
 static int		gpiointr_detach(device_t);
@@ -100,41 +102,46 @@ gpiointr_intr_mode_to_str(uint32_t intr_mode)
 }
 
 static int
-gpiointr_allocate_pin(struct gpiointr_softc *sc, int pinnumber)
+gpiointr_allocate_pin(struct gpiointr_cdevpriv *priv)
 {
+	struct gpiointr_softc *sc;
 	uint32_t intr_mode;
 	int err;
 
-	intr_mode = sc->pins[pinnumber].pin->flags & GPIO_INTR_MASK;
+	sc = priv->sc;
 
-	sc->pins[pinnumber].intr_res = gpio_alloc_intr_resource(sc->pins[pinnumber].pin->dev, &sc->pins[pinnumber].intr_rid, RF_ACTIVE, sc->pins[pinnumber].pin, intr_mode);
-	if (sc->pins[pinnumber].intr_res == NULL) {
+	intr_mode = priv->pin->pin->flags & GPIO_INTR_MASK;
+
+	priv->pin->intr_res = gpio_alloc_intr_resource(priv->pin->pin->dev, &priv->pin->intr_rid, RF_ACTIVE, priv->pin->pin, intr_mode);
+	if (priv->pin->intr_res == NULL) {
 		device_printf(sc->dev, "cannot allocate interrupt resource\n");
 		return (ENXIO);
 	}
 
-	err = bus_setup_intr(sc->pins[pinnumber].pin->dev, sc->pins[pinnumber].intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, sc, &sc->pins[pinnumber].intr_cookie);
+	err = bus_setup_intr(priv->pin->pin->dev, priv->pin->intr_res, INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpiointr_interrupt_handler, priv, &priv->pin->intr_cookie);
 	if (err != 0) {
 		device_printf(sc->dev, "cannot set up interrupt\n");
 		return (err);
 	}
 
-	sc->pins[pinnumber].configured = true;
+	priv->pin->configured = true;
 	sc->active = true;
 
-	device_printf(sc->dev, "interrupt on %s pin %d (%s)\n", device_get_nameunit(sc->pins[pinnumber].pin->dev), sc->pins[pinnumber].pin->pin, gpiointr_intr_mode_to_str(intr_mode));
+	device_printf(sc->dev, "interrupt on %s pin %d (%s)\n", device_get_nameunit(priv->pin->pin->dev), priv->pin->pin->pin, gpiointr_intr_mode_to_str(intr_mode));
 
 	return (0);
 }
 
 static int
-gpiointr_release_pin(struct gpiointr_softc *sc, int pinnumber)
+gpiointr_release_pin(struct gpiointr_cdevpriv *priv)
 {
+	struct gpiointr_softc *sc;
 	int err;
 
+	sc = priv->sc;
 	err = 0;
 
-	sc->pins[pinnumber].configured = false;
+	priv->pin->configured = false;
 
 	/* Mark driver only as inactive when no pin is configured anymore */
 	sc->active = false;
@@ -144,27 +151,25 @@ gpiointr_release_pin(struct gpiointr_softc *sc, int pinnumber)
 		}
 	}
 
-	/* Make pending IO syscalls return when no more pins are configured */
-	if (!sc->active) {
-		wakeup(sc);
-		KNOTE_UNLOCKED(&sc->selinfo.si_note, 0);
-		selwakeup(&sc->selinfo);
-	}
+	/* Make pending IO syscalls on current pin return */
+	wakeup(priv);
+	KNOTE_UNLOCKED(&priv->selinfo.si_note, 0);
+	selwakeup(&priv->selinfo);
 
-	if (sc->pins[pinnumber].intr_cookie != NULL) {
-		err = bus_teardown_intr(sc->pins[pinnumber].pin->dev, sc->pins[pinnumber].intr_res, sc->pins[pinnumber].intr_cookie);
+	if (priv->pin->intr_cookie != NULL) {
+		err = bus_teardown_intr(priv->pin->pin->dev, priv->pin->intr_res, priv->pin->intr_cookie);
 		if (err != 0)
 			device_printf(sc->dev, "cannot tear down interrupt\n");
 		else
-			sc->pins[pinnumber].intr_cookie = NULL;
+			priv->pin->intr_cookie = NULL;
 	}
 
-	if (sc->pins[pinnumber].intr_res != NULL) {
-		err = bus_release_resource(sc->pins[pinnumber].pin->dev, SYS_RES_IRQ, sc->pins[pinnumber].intr_rid, sc->pins[pinnumber].intr_res);
+	if (priv->pin->intr_res != NULL) {
+		err = bus_release_resource(priv->pin->pin->dev, SYS_RES_IRQ, priv->pin->intr_rid, priv->pin->intr_res);
 		if (err != 0)
 			device_printf(sc->dev, "cannot release interrupt resource\n");
 		else
-			sc->pins[pinnumber].intr_res = NULL;
+			priv->pin->intr_res = NULL;
 	}
 
 	return (0);
@@ -193,8 +198,6 @@ gpiointr_attach(device_t dev)
 	inst_name = device_get_nameunit(dev);
 
 	mtx_init(&sc->mtx, inst_name, NULL, MTX_DEF);
-
-	knlist_init_mtx(&sc->selinfo.si_note, &sc->mtx);
 
 	err = GPIO_PIN_MAX(sc->pdev, &sc->npins);
 	if (err != 0) {
@@ -234,9 +237,6 @@ gpiointr_detach(device_t dev)
 
 	sc = device_get_softc(dev);
 
-	for (int i = 0; i <= sc->npins; i++)
-		gpiointr_release_pin(sc, i);
-
 	if (sc->cdev != NULL)
 		destroy_dev(sc->cdev);
 
@@ -244,9 +244,6 @@ gpiointr_detach(device_t dev)
 		free(sc->pins[i].pin, M_GPIOINTR);
 
 	free(sc->pins, M_GPIOINTR);
-
-	knlist_clear(&sc->selinfo.si_note, 0);
-	knlist_destroy(&sc->selinfo.si_note);
 
 	mtx_destroy(&sc->mtx);
 
@@ -256,32 +253,42 @@ gpiointr_detach(device_t dev)
 static void
 gpiointr_interrupt_handler(void *arg)
 {
-	struct gpiointr_softc *sc;
+	struct gpiointr_cdevpriv *priv;
 
-	sc = arg;
+	priv = arg;
 
-	if (sc->active)
+	if (priv->pin->configured)
 	{
-		mtx_lock(&sc->mtx);
+		mtx_lock(&priv->mtx);
 
-		wakeup(sc);
+		wakeup(priv);
 
-		sc->intr_toogle = !sc->intr_toogle;
-		selwakeup(&sc->selinfo);
+		priv->intr_toogle = !priv->intr_toogle;
+		selwakeup(&priv->selinfo);
 
-		KNOTE_LOCKED(&sc->selinfo.si_note, 1);
+		KNOTE_LOCKED(&priv->selinfo.si_note, 1);
 
-		sc->counter++;
-		if (sc->counter == 0u)
-			device_printf(sc->dev, "interrupt counter overflow\n");
+		priv->counter++;
+		if (priv->counter == 0u)
+			device_printf(priv->sc->dev, "interrupt counter overflow\n");
 
-		mtx_unlock(&sc->mtx);
+		mtx_unlock(&priv->mtx);
 	}
 }
 
 static void
 gpiointr_cdevpriv_dtor(void *data)
 {
+	struct gpiointr_cdevpriv *priv;
+
+	priv = data;
+
+	gpiointr_release_pin(priv);
+
+	knlist_clear(&priv->selinfo.si_note, 0);
+	knlist_destroy(&priv->selinfo.si_note);
+
+        mtx_destroy(&priv->mtx);
 
 	free(data, M_GPIOINTR);
 }
@@ -295,11 +302,18 @@ gpiointr_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 	priv = malloc(sizeof(*priv), M_GPIOINTR,  M_WAITOK | M_ZERO);
 
 	err = devfs_set_cdevpriv(priv, gpiointr_cdevpriv_dtor);
-	if (err != 0)
+	if (err != 0) {
 		gpiointr_cdevpriv_dtor(priv);
+		return (err);
+	}
+
 	priv->sc = dev->si_drv1;
 
-	return (err);
+	mtx_init(&priv->mtx, "xx", NULL, MTX_DEF);
+
+	knlist_init_mtx(&priv->selinfo.si_note, &priv->mtx);
+
+	return (0);
 }
 
 static int
@@ -312,14 +326,16 @@ gpiointr_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
 static int
 gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag)
 {
-	struct gpiointr_softc *sc;
+	struct gpiointr_cdevpriv *priv;
 	int err;
 
-	sc = dev->si_drv1;
+	err = devfs_get_cdevpriv((void **)&priv);
+	if (err != 0)
+		return err;
 
 	do {
-		if (sc->active == true)
-			err = tsleep(sc, PCATCH, "gpiointrwait", 20 * hz);
+		if (priv->pin->configured == true)
+			err = tsleep(priv, PCATCH, "gpiointrwait", 20 * hz);
 		else
 			err = ENXIO;
 	} while (err == EWOULDBLOCK);
@@ -331,29 +347,28 @@ static int
 gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td)
 {
 	struct gpiointr_softc *sc;
+	struct gpiointr_cdevpriv *priv;
 	struct gpio_intr_config intr_config;
 	unsigned int counter;
 	int err;
 
 	sc = dev->si_drv1;
 
+	err = devfs_get_cdevpriv((void **)&priv);
+	if (err != 0)
+		return err;
+
 	switch (cmd) {
 
 	case GPIOINTRGETCONFIG:
 
-		bcopy(data, &intr_config, sizeof(intr_config));
-
-		if (intr_config.gp_pin < 0 || intr_config.gp_pin > sc->npins) {
-			device_printf(sc->dev, "invalid pin %d\n", intr_config.gp_pin);
-			return (EINVAL);
-		}
-
-		if (sc->pins[intr_config.gp_pin].configured == false) {
-			device_printf(sc->dev, "pin %d is not configured\n", intr_config.gp_pin);
+		if (priv->pin == NULL || priv->pin->configured == false) {
+			device_printf(sc->dev, "file descriptor is not configured\n");
 			return (ENXIO);
 		}
 
-		intr_config.gp_intr_flags = sc->pins[intr_config.gp_pin].pin->flags & GPIO_INTR_MASK;
+		intr_config.gp_pin = priv->pin->pin->pin;
+		intr_config.gp_intr_flags = priv->pin->pin->flags & GPIO_INTR_MASK;
 
 		bcopy(&intr_config, data, sizeof(intr_config));
 
@@ -368,44 +383,46 @@ gpiointr_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thr
 			return (EINVAL);
 		}
 
-		if (sc->pins[intr_config.gp_pin].configured == true) {
-			err = gpiointr_release_pin(sc, intr_config.gp_pin);
+		if (priv->pin != NULL && priv->pin->configured == true) {
+			err = gpiointr_release_pin(priv);
 			if (err != 0)
 				return (err);
 		}
 
-		/* Update pin */
-		err = GPIO_PIN_GETFLAGS(sc->pins[intr_config.gp_pin].pin->dev, sc->pins[intr_config.gp_pin].pin->pin, &sc->pins[intr_config.gp_pin].pin->flags);
+		priv->pin = &sc->pins[intr_config.gp_pin];
+
+		/* Update pin flags*/
+		err = GPIO_PIN_GETFLAGS(priv->pin->pin->dev, priv->pin->pin->pin, &priv->pin->pin->flags);
 		if (err != 0) {
 			device_printf(sc->dev, "cannot get flags of pin %d\n", intr_config.gp_pin);
 			return (err);
 		}
-		sc->pins[intr_config.gp_pin].pin->flags &= ~GPIO_INTR_MASK;
-		sc->pins[intr_config.gp_pin].pin->flags |= (intr_config.gp_intr_flags & GPIO_INTR_MASK);
+		priv->pin->pin->flags &= ~GPIO_INTR_MASK;
+		priv->pin->pin->flags |= (intr_config.gp_intr_flags & GPIO_INTR_MASK);
 
-		if ((sc->pins[intr_config.gp_pin].pin->flags & GPIO_INTR_MASK) != GPIO_INTR_NONE) {
-			err = gpiointr_allocate_pin(sc, intr_config.gp_pin);
+		if ((priv->pin->pin->flags & GPIO_INTR_MASK) != GPIO_INTR_NONE) {
+			err = gpiointr_allocate_pin(priv);
 			if (err != 0) {
-				gpiointr_release_pin(sc, intr_config.gp_pin);
+				gpiointr_release_pin(priv);
 				return (err);
 			}
 		} else {
-			device_printf(sc->dev, "interrupt on %s pin %d removed\n", device_get_nameunit(sc->pins[intr_config.gp_pin].pin->dev), intr_config.gp_pin);
+			device_printf(sc->dev, "interrupt on %s pin %d removed\n", device_get_nameunit(priv->pin->pin->dev), priv->pin->pin->pin);
 		}
 
 		break;
 
 	case GPIOINTRRESETCOUNTER:
 
-		mtx_lock(&sc->mtx);
-		sc->counter = 0u;
-		mtx_unlock(&sc->mtx);
+		mtx_lock(&priv->mtx);
+		priv->counter = 0u;
+		mtx_unlock(&priv->mtx);
 
 		break;
 
 	case GPIOINTRGETCOUNTER:
 
-		counter = sc->counter;
+		counter = priv->counter;
 		bcopy(&counter, data, sizeof(counter));
 
 		break;
@@ -446,15 +463,15 @@ gpiointr_poll(struct cdev *dev, int events, struct thread *td)
 	mtx_lock(&sc->mtx);
 
 	if (events & (POLLIN | POLLRDNORM)) {
-		if (priv->poll_en && (sc->intr_toogle != priv->intr_toogle)) {
+		if (priv->poll_en && (priv->pin->intr_toogle != priv->intr_toogle)) {
 			revents |= POLLIN | POLLRDNORM;
 			priv->poll_en = false;
-		} else if (priv->poll_en && (sc->intr_toogle == priv->intr_toogle)) {
-			selrecord(td, &sc->selinfo);
+		} else if (priv->poll_en && (priv->pin->intr_toogle == priv->intr_toogle)) {
+			selrecord(td, &priv->selinfo);
 		} else {
 			priv->poll_en = true;
-			priv->intr_toogle = sc->intr_toogle;
-			selrecord(td, &sc->selinfo);
+			priv->intr_toogle = priv->pin->intr_toogle;
+			selrecord(td, &priv->selinfo);
 		}
 	}
 
@@ -489,7 +506,7 @@ gpiointr_kqfilter(struct cdev *dev, struct knote *kn)
 		return (EOPNOTSUPP);
 	}
 
-	knlist = &sc->selinfo.si_note;
+	knlist = &priv->selinfo.si_note;
 	knlist_add(knlist, kn, 0);
 
 	return (0);
@@ -525,12 +542,10 @@ static void
 gpiointr_kqdetach(struct knote *kn)
 {
 	struct gpiointr_cdevpriv *priv;
-	struct gpiointr_softc *sc;
 	struct knlist *knlist;
 
 	priv = kn->kn_hook;
-	sc = priv->sc;
-	knlist = &sc->selinfo.si_note;
+	knlist = &priv->selinfo.si_note;
 
 	knlist_remove(knlist, kn, 0);
 }
