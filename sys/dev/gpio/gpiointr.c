@@ -283,7 +283,8 @@ gpiointr_cdevpriv_dtor(void *data)
 
 	priv = data;
 
-	gpiointr_release_pin(priv);
+	if (priv->pin != NULL && priv->pin->configured == true)
+		gpiointr_release_pin(priv);
 
 	knlist_clear(&priv->selinfo.si_note, 0);
 	knlist_destroy(&priv->selinfo.si_note);
@@ -334,7 +335,7 @@ gpiointr_read(struct cdev *dev, struct uio *uio, int ioflag)
 		return err;
 
 	do {
-		if (priv->pin->configured == true)
+		if (priv->pin != NULL && priv->pin->configured == true)
 			err = tsleep(priv, PCATCH, "gpiointrwait", 20 * hz);
 		else
 			err = ENXIO;
@@ -454,7 +455,7 @@ gpiointr_poll(struct cdev *dev, int events, struct thread *td)
 		return (revents);
 	}
 
-	if (sc->active == false) {
+	if (sc->active == false || priv->pin == NULL || priv->pin->configured == false) {
 		revents = POLLHUP;
 		priv->poll_en = false;
 		return (revents);
@@ -494,7 +495,7 @@ gpiointr_kqfilter(struct cdev *dev, struct knote *kn)
 	if (err != 0)
 		return err;
 
-	if (sc->active == false)
+	if (sc->active == false || priv->pin == NULL || priv->pin->configured == false)
 		return (ENXIO);
 
 	switch(kn->kn_filter) {
@@ -521,7 +522,7 @@ gpiointr_kqread(struct knote *kn, long hint)
 	priv = kn->kn_hook;
 	sc = priv->sc;
 
-	if (sc->active == false) {
+	if (sc->active == false || priv->pin == NULL || priv->pin->configured == false) {
 		kn->kn_flags |= EV_EOF;
 		return (1);
 	} else {
