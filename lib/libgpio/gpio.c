@@ -75,44 +75,6 @@ gpio_close(gpio_handle_t handle)
 	close(handle);
 }
 
-gpio_intr_handle_t
-gpio_intr_open(unsigned int unit)
-{
-	char device[19];
-
-	snprintf(device, sizeof(device), "/dev/gpiointr%u", unit);
-
-	return (gpio_intr_open_device(device));
-}
-
-gpio_intr_handle_t
-gpio_intr_open_device(const char *device)
-{
-	int fd, counter;
-	int serr;
-
-	fd = open(device, O_RDONLY);
-	if (fd < 0)
-		return (GPIO_INVALID_HANDLE);
-	/*
-	 * Check whether a simple ioctl works.
-	 */
-	if (ioctl(fd, GPIOINTRGETCOUNTER, &counter) < 0) {
-		serr = errno;
-		close(fd);
-		errno = serr;
-		return (GPIO_INVALID_HANDLE);
-	}
-
-	return (fd);
-}
-
-void
-gpio_intr_close(gpio_intr_handle_t handle)
-{
-	close(handle);
-}
-
 int
 gpio_pin_list(gpio_handle_t handle, gpio_config_t **pcfgs)
 {
@@ -157,21 +119,6 @@ gpio_pin_config(gpio_handle_t handle, gpio_config_t *cfg)
 }
 
 int
-gpio_intr_pin_config(gpio_intr_handle_t handle, gpio_intr_config_t *cfg)
-{
-	struct gpio_intr_config gpintrconfig;
-
-	if (cfg == NULL)
-		return (-1);
-	gpintrconfig.gp_pin = cfg->g_pin;
-	if (ioctl(handle, GPIOINTRGETCONFIG, &gpintrconfig) < 0)
-		return (-1);
-	cfg->g_intr_flags = gpintrconfig.gp_intr_flags;
-
-	return (0);
-}
-
-int
 gpio_pin_set_name(gpio_handle_t handle, gpio_pin_t pin, char *name)
 {
 	struct gpio_pin gppin;
@@ -197,21 +144,6 @@ gpio_pin_set_flags(gpio_handle_t handle, gpio_config_t *cfg)
 	gppin.gp_pin = cfg->g_pin;
 	gppin.gp_flags = cfg->g_flags;
 	if (ioctl(handle, GPIOSETCONFIG, &gppin) < 0)
-		return (-1);
-
-	return (0);
-}
-
-int
-gpio_intr_pin_set_flags(gpio_intr_handle_t handle, gpio_intr_config_t *cfg)
-{
-	struct gpio_intr_config gpintrconfig;
-
-	if (cfg == NULL)
-		return (-1);
-	gpintrconfig.gp_pin = cfg->g_pin;
-	gpintrconfig.gp_intr_flags = cfg->g_intr_flags;
-	if (ioctl(handle, GPIOINTRSETCONFIG, &gpintrconfig) < 0)
 		return (-1);
 
 	return (0);
