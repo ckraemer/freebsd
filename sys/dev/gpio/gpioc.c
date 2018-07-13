@@ -51,24 +51,150 @@ __FBSDID("$FreeBSD$");
 #define dprintf(x, arg...)
 #endif
 
+struct gpioc_softc {
+	device_t		sc_dev;		/* gpiocX dev */
+	device_t		sc_pdev;	/* gpioX dev */
+	struct cdev		*sc_ctl_dev;	/* controller device */
+	int			sc_unit;
+	int			sc_npins;
+	struct gpioc_pin_intr	*sc_pin_intr;
+};
+
+struct gpioc_pin_intr {
+	gpio_pin_t					pin;
+	int						intr_rid;
+	struct resource					*intr_res;
+	void						*intr_cookie;
+	struct mtx					mtx;
+	SLIST_HEAD(gpioc_privs_list, gpioc_privs)	privs;
+};
+
+struct gpioc_cdevpriv {
+	struct gpioc_softc	*sc;
+};
+
+struct gpioc_privs {
+	struct gpioc_cdevpriv		*priv;
+	SLIST_ENTRY(gpioc_privs)	next;
+};
+
+static MALLOC_DEFINE(M_GPIOC, "gpioc", "gpioc device data");
+
+static int	gpioc_allocate_pin_intr(struct gpioc_pin_intr*, uint32_t);
+static int	gpioc_release_pin_intr(struct gpioc_pin_intr*);
+static int	gpioc_set_intr_config(struct gpioc_softc*,
+		    struct gpioc_cdevpriv*, uint32_t, uint32_t);
+static void	gpioc_interrupt_handler(void*);
+
 static int gpioc_probe(device_t dev);
 static int gpioc_attach(device_t dev);
 static int gpioc_detach(device_t dev);
 
+static void gpioc_cdevpriv_dtor(void*);
+
+static d_open_t		gpioc_open;
+static d_read_t		gpioc_read;
 static d_ioctl_t	gpioc_ioctl;
 
 static struct cdevsw gpioc_cdevsw = {
 	.d_version	= D_VERSION,
+	.d_open		= gpioc_open,
+	.d_read		= gpioc_read,
 	.d_ioctl	= gpioc_ioctl,
 	.d_name		= "gpioc",
 };
 
-struct gpioc_softc {
-	device_t	sc_dev;		/* gpiocX dev */
-	device_t	sc_pdev;	/* gpioX dev */
-	struct cdev	*sc_ctl_dev;	/* controller device */
-	int		sc_unit;
-};
+static int
+gpioc_allocate_pin_intr(struct gpioc_pin_intr *intr_conf, uint32_t flags)
+{
+	int err;
+
+	intr_conf->intr_res = gpio_alloc_intr_resource(intr_conf->pin->dev,
+	    &intr_conf->intr_rid, RF_ACTIVE, intr_conf->pin, flags);
+	if (intr_conf->intr_res == NULL)
+		return (ENXIO);
+
+	err = bus_setup_intr(intr_conf->pin->dev, intr_conf->intr_res,
+	    INTR_TYPE_MISC | INTR_MPSAFE, NULL, gpioc_interrupt_handler,
+	    intr_conf, &intr_conf->intr_cookie);
+	if (err != 0)
+		return (err);
+
+	intr_conf->pin->flags = flags;
+
+	return (0);
+}
+
+static int
+gpioc_release_pin_intr(struct gpioc_pin_intr *intr_conf)
+{
+	int err;
+
+	if (intr_conf->intr_cookie != NULL) {
+		err = bus_teardown_intr(intr_conf->pin->dev,
+		    intr_conf->intr_res, intr_conf->intr_cookie);
+		if (err != 0)
+			return (err);
+		else
+			intr_conf->intr_cookie = NULL;
+	}
+
+	if (intr_conf->intr_res != NULL) {
+		err = bus_release_resource(intr_conf->pin->dev, SYS_RES_IRQ,
+		    intr_conf->intr_rid, intr_conf->intr_res);
+		if (err != 0)
+			return (err);
+		else {
+			intr_conf->intr_rid = 0;
+			intr_conf->intr_res = NULL;
+		}
+	}
+
+	intr_conf->pin->flags = 0;
+
+	return (0);
+}
+
+static int
+gpioc_set_intr_config(struct gpioc_softc *sc, struct gpioc_cdevpriv *priv,
+    uint32_t pin, uint32_t flags)
+{
+	struct gpioc_pin_intr *intr_conf = &sc->sc_pin_intr[pin];
+	int res;
+
+	res = 0;
+	if (intr_conf->pin->flags == 0 && flags == 0) {
+		/* No interrupt configured and none requested: Do nothing. */
+		return (0);
+	} else if (intr_conf->pin->flags == 0 && flags != 0) {
+		/* No interrupt is configured, but one is requested: Allocate
+		   and setup interrupt on the according pin. */
+		res = gpioc_allocate_pin_intr(intr_conf, flags);
+		if (res != 0)
+			return (res);
+	} else if (intr_conf->pin->flags == flags){
+		/* Same interrupt requested as already configured: Attach the
+		   cdevpriv to the corresponding pin. */
+		return (ENOTSUP);
+	} else if (intr_conf->pin->flags != 0 && flags == 0) {
+		/* Interrupt configured, but none requested: Teardown and
+		   release the pin. */
+		res = gpioc_release_pin_intr(intr_conf);
+		if (res != 0)
+			return (res);
+	} else {
+		/* Other flag requested than configured: Reconfigure when no
+		   other cdevpriv is are attached to the pin. */
+		return (ENOTSUP);
+	}
+
+	return (0);
+}
+
+static void
+gpioc_interrupt_handler(void *arg)
+{
+}
 
 static int
 gpioc_probe(device_t dev)
@@ -88,6 +214,21 @@ gpioc_attach(device_t dev)
 	sc->sc_dev = dev;
 	sc->sc_pdev = device_get_parent(dev);
 	sc->sc_unit = device_get_unit(dev);
+
+	err = GPIO_PIN_MAX(sc->sc_pdev, &sc->sc_npins);
+	if (err != 0)
+		return (err);
+	sc->sc_pin_intr = malloc(sizeof(struct gpioc_pin_intr) * sc->sc_npins,
+	    M_GPIOC, M_WAITOK | M_ZERO);
+	for (int i = 0; i <= sc->sc_npins; i++) {
+		sc->sc_pin_intr[i].pin = malloc(sizeof(struct gpiobus_pin),
+		    M_GPIOC, M_WAITOK | M_ZERO);
+		sc->sc_pin_intr[i].pin->pin = i;
+		sc->sc_pin_intr[i].pin->dev = sc->sc_pdev;
+		mtx_init(&sc->sc_pin_intr[i].mtx, "gpioc pin", NULL, MTX_DEF);
+		SLIST_INIT(&sc->sc_pin_intr[i].privs);
+	}
+
 	make_dev_args_init(&devargs);
 	devargs.mda_devsw = &gpioc_cdevsw;
 	devargs.mda_uid = UID_ROOT;
@@ -112,8 +253,45 @@ gpioc_detach(device_t dev)
 	if (sc->sc_ctl_dev)
 		destroy_dev(sc->sc_ctl_dev);
 
+	for (int i = 0; i <= sc->sc_npins; i++) {
+		mtx_destroy(&sc->sc_pin_intr[i].mtx);
+		free(&sc->sc_pin_intr[i].pin, M_GPIOC);
+	}
+	free(sc->sc_pin_intr, M_GPIOC);
+
 	if ((err = bus_generic_detach(dev)) != 0)
 		return (err);
+
+	return (0);
+}
+
+static void
+gpioc_cdevpriv_dtor(void *data)
+{
+
+	free(data, M_GPIOC);
+}
+
+static int
+gpioc_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
+{
+	struct gpioc_cdevpriv *priv;
+	int err;
+
+	priv = malloc(sizeof(*priv), M_GPIOC, M_WAITOK | M_ZERO);
+	err = devfs_set_cdevpriv(priv, gpioc_cdevpriv_dtor);
+	if (err != 0) {
+		gpioc_cdevpriv_dtor(priv);
+		return (err);
+	}
+	priv->sc = dev->si_drv1;
+
+	return (0);
+}
+
+static int
+gpioc_read(struct cdev *dev, struct uio *uio, int ioflag)
+{
 
 	return (0);
 }
@@ -125,6 +303,7 @@ gpioc_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	device_t bus;
 	int max_pin, res;
 	struct gpioc_softc *sc = cdev->si_drv1;
+	struct gpioc_cdevpriv *priv;
 	struct gpio_pin pin;
 	struct gpio_req req;
 	struct gpio_access_32 *a32;
@@ -155,12 +334,18 @@ gpioc_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 		case GPIOSETCONFIG:
 			bcopy(arg, &pin, sizeof(pin));
 			dprintf("set config pin %d\n", pin.gp_pin);
-			res = GPIO_PIN_GETCAPS(sc->sc_pdev, pin.gp_pin, &caps);
+			res = devfs_get_cdevpriv((void **)&priv);
+			if (res == 0)
+				res = GPIO_PIN_GETCAPS(sc->sc_pdev, pin.gp_pin,
+				    &caps);
 			if (res == 0)
 				res = gpio_check_flags(caps, pin.gp_flags);
 			if (res == 0)
 				res = GPIO_PIN_SETFLAGS(sc->sc_pdev, pin.gp_pin,
-				    pin.gp_flags);
+				    (pin.gp_flags & ~GPIO_INTR_MASK));
+			if (res == 0)
+				res = gpioc_set_intr_config(sc, priv,
+				    pin.gp_pin, (pin.gp_flags & GPIO_INTR_MASK));
 			break;
 		case GPIOGET:
 			bcopy(arg, &req, sizeof(req));
