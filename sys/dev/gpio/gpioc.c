@@ -37,6 +37,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/ioccom.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/poll.h>
+#include <sys/selinfo.h>
 #include <sys/module.h>
 
 #include <dev/gpio/gpiobusvar.h>
@@ -72,6 +74,7 @@ struct gpioc_pin_intr {
 struct gpioc_cdevpriv {
 	struct gpioc_softc			*sc;
 	uint32_t				last_intr_pin;
+	struct selinfo				selinfo;
 	struct mtx				mtx;
 	SLIST_HEAD(gpioc_pins_list, gpioc_pins)	pins;
 };
@@ -111,12 +114,14 @@ static void gpioc_cdevpriv_dtor(void*);
 static d_open_t		gpioc_open;
 static d_read_t		gpioc_read;
 static d_ioctl_t	gpioc_ioctl;
+static d_poll_t		gpioc_poll;
 
 static struct cdevsw gpioc_cdevsw = {
 	.d_version	= D_VERSION,
 	.d_open		= gpioc_open,
 	.d_read		= gpioc_read,
 	.d_ioctl	= gpioc_ioctl,
+	.d_poll		= gpioc_poll,
 	.d_name		= "gpioc",
 };
 
@@ -359,6 +364,7 @@ gpioc_interrupt_handler(void *arg)
 		privs->priv->last_intr_pin = intr_conf->pin->pin;
 		mtx_unlock(&privs->priv->mtx);
 		wakeup(privs->priv);
+		selwakeup(&privs->priv->selinfo);
 	}
 
 	mtx_unlock(&intr_conf->mtx);
@@ -604,6 +610,36 @@ gpioc_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	}
 
 	return (res);
+}
+
+static int
+gpioc_poll(struct cdev *dev, int events, struct thread *td)
+{
+	struct gpioc_cdevpriv *priv;
+	int err;
+	int revents;
+
+	revents = 0;
+
+	err = devfs_get_cdevpriv((void **)&priv);
+	if (err != 0) {
+		revents = POLLERR;
+		return (revents);
+	}
+
+	if (SLIST_EMPTY(&priv->pins)) {
+		revents = POLLHUP;
+		return (revents);
+	}
+
+	if (events & (POLLIN | POLLRDNORM)) {
+		if (priv->last_intr_pin != -1)
+			revents |= events & (POLLIN | POLLRDNORM);
+		else
+			selrecord(td, &priv->selinfo);
+	}
+
+	return(revents);
 }
 
 static device_method_t gpioc_methods[] = {
