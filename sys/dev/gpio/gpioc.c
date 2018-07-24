@@ -37,6 +37,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/ioccom.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/uio.h>
 #include <sys/poll.h>
 #include <sys/selinfo.h>
 #include <sys/module.h>
@@ -495,18 +496,34 @@ static int
 gpioc_read(struct cdev *dev, struct uio *uio, int ioflag)
 {
 	struct gpioc_cdevpriv *priv;
+	uint32_t last_intr_pin;
 	int err;
+
+	if (uio->uio_resid < sizeof(priv->last_intr_pin))
+		return EINVAL;
 
 	err = devfs_get_cdevpriv((void **)&priv);
 	if (err != 0)
 		return err;
 
+	mtx_lock(&priv->mtx);
 	do {
 		if (!SLIST_EMPTY(&priv->pins))
-			err = tsleep(priv, PCATCH, "gpiointrwait", 20 * hz);
+			err = msleep(priv, &priv->mtx, PCATCH, "gpiocintr", 0);
 		else
 			err = ENXIO;
 	} while (err == EWOULDBLOCK);
+
+	if (err == 0 && priv->last_intr_pin != -1)
+	{
+		last_intr_pin = priv->last_intr_pin;
+		priv->last_intr_pin = -1;
+		mtx_unlock(&priv->mtx);
+		err = uiomove(&last_intr_pin, sizeof(last_intr_pin), uio);
+	}
+	else {
+		mtx_unlock(&priv->mtx);
+	}
 
 	return (err);
 }
