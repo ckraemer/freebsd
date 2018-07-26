@@ -473,6 +473,9 @@ gpioc_cdevpriv_dtor(void *data)
 	}
 	mtx_unlock(&priv->mtx);
 
+	wakeup(&priv);
+	seldrain(&priv->selinfo);
+
 	mtx_destroy(&priv->mtx);
 	free(data, M_GPIOC);
 }
