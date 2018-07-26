@@ -194,14 +194,14 @@ gpioc_attach_priv_pin(struct gpioc_cdevpriv *priv,
 			consistency_a++;
 	}
 	KASSERT(consistency_a <= 1,
-	    ("inconsistent links between pin config and cdevprivA"));
+	    ("inconsistent links between pin config and cdevpriv"));
 	SLIST_FOREACH(pin_link, &priv->pins, next) {
 		if (pin_link->pin == intr_conf)
 			consistency_b++;
 	}
 	KASSERT(consistency_a == consistency_b,
-	    ("inconsistent links between pin config and cdevprivB"));
-	if(consistency_a == 1 && consistency_b == 1) {
+	    ("inconsistent links between pin config and cdevpriv"));
+	if (consistency_a == 1 && consistency_b == 1) {
 		mtx_unlock(&priv->mtx);
 		mtx_unlock(&intr_conf->mtx);
 		return (EEXIST);
@@ -245,7 +245,8 @@ gpioc_detach_priv_pin(struct gpioc_cdevpriv *priv,
 	mtx_lock(&priv->mtx);
 	SLIST_FOREACH_SAFE(priv_link, &intr_conf->privs, next, priv_link_temp) {
 		if (priv_link->priv == priv) {
-			SLIST_REMOVE(&intr_conf->privs, priv_link, gpioc_privs, next);
+			SLIST_REMOVE(&intr_conf->privs, priv_link, gpioc_privs,
+			    next);
 			free(priv_link, M_GPIOC);
 			consistency_a++;
 		}
@@ -268,7 +269,8 @@ gpioc_detach_priv_pin(struct gpioc_cdevpriv *priv,
 }
 
 static bool
-gpioc_intr_reconfig_allowed(struct gpioc_cdevpriv *priv, struct gpioc_pin_intr *intr_conf)
+gpioc_intr_reconfig_allowed(struct gpioc_cdevpriv *priv,
+    struct gpioc_pin_intr *intr_conf)
 {
 	struct gpioc_privs	*priv_link;
 
@@ -311,7 +313,7 @@ gpioc_set_intr_config(struct gpioc_softc *sc, struct gpioc_cdevpriv *priv,
 		res = gpioc_attach_priv_pin(priv, intr_conf);
 		if (res != 0 && res != EEXIST)
 			return (res);
-	} else if (intr_conf->pin->flags == flags){
+	} else if (intr_conf->pin->flags == flags) {
 		/* Same interrupt requested as already configured: Attach the
 		   cdevpriv to the corresponding pin. */
 		res = gpioc_attach_priv_pin(priv, intr_conf);
@@ -321,7 +323,7 @@ gpioc_set_intr_config(struct gpioc_softc *sc, struct gpioc_cdevpriv *priv,
 		/* Interrupt configured, but none requested: Teardown and
 		   release the pin when no other cdevpriv is attached.
 		   Otherwise just detach pin and cdevpriv from each other. */
-		if(gpioc_intr_reconfig_allowed(priv, intr_conf)) {
+		if (gpioc_intr_reconfig_allowed(priv, intr_conf)) {
 			res = gpioc_release_pin_intr(intr_conf);
 			if (res != 0)
 				return (res);
@@ -332,7 +334,7 @@ gpioc_set_intr_config(struct gpioc_softc *sc, struct gpioc_cdevpriv *priv,
 	} else {
 		/* Other flag requested than configured: Reconfigure when no
 		   other cdevpriv is are attached to the pin. */
-		if(!gpioc_intr_reconfig_allowed(priv, intr_conf))
+		if (!gpioc_intr_reconfig_allowed(priv, intr_conf))
 			return (EBUSY);
 		else {
 			res = gpioc_release_pin_intr(intr_conf);
@@ -454,9 +456,11 @@ gpioc_cdevpriv_dtor(void *data)
 	SLIST_FOREACH_SAFE(pin_link, &priv->pins, next, pin_link_temp) {
 		consistency = 0;
 		mtx_lock(&pin_link->pin->mtx);
-		SLIST_FOREACH_SAFE(priv_link, &pin_link->pin->privs, next, priv_link_temp) {
+		SLIST_FOREACH_SAFE(priv_link, &pin_link->pin->privs, next,
+		    priv_link_temp) {
 			if (priv_link->priv == priv) {
-				SLIST_REMOVE(&pin_link->pin->privs, priv_link, gpioc_privs, next);
+				SLIST_REMOVE(&pin_link->pin->privs, priv_link,
+				    gpioc_privs, next);
 				free(priv_link, M_GPIOC);
 				consistency++;
 			}
@@ -582,7 +586,8 @@ gpioc_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 				    (pin.gp_flags & ~GPIO_INTR_MASK));
 			if (res == 0)
 				res = gpioc_set_intr_config(sc, priv,
-				    pin.gp_pin, (pin.gp_flags & GPIO_INTR_MASK));
+				    pin.gp_pin,
+				    (pin.gp_flags & GPIO_INTR_MASK));
 			break;
 		case GPIOGET:
 			bcopy(arg, &req, sizeof(req));
@@ -656,7 +661,7 @@ gpioc_poll(struct cdev *dev, int events, struct thread *td)
 			selrecord(td, &priv->selinfo);
 	}
 
-	return(revents);
+	return (revents);
 }
 
 static device_method_t gpioc_methods[] = {
