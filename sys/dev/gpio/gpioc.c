@@ -116,6 +116,11 @@ static d_open_t		gpioc_open;
 static d_read_t		gpioc_read;
 static d_ioctl_t	gpioc_ioctl;
 static d_poll_t		gpioc_poll;
+static d_kqfilter_t	gpioc_kqfilter;
+
+static int		gpioc_kqread(struct knote*, long);
+static void		gpioc_kqdetach(struct knote*);
+
 
 static struct cdevsw gpioc_cdevsw = {
 	.d_version	= D_VERSION,
@@ -123,7 +128,16 @@ static struct cdevsw gpioc_cdevsw = {
 	.d_read		= gpioc_read,
 	.d_ioctl	= gpioc_ioctl,
 	.d_poll		= gpioc_poll,
+	.d_kqfilter	= gpioc_kqfilter,
 	.d_name		= "gpioc",
+};
+
+static struct filterops gpioc_read_filterops = {
+	.f_isfd =	true,
+	.f_attach =	NULL,
+	.f_detach =	gpioc_kqdetach,
+	.f_event =	gpioc_kqread,
+	.f_touch =	NULL
 };
 
 static int
@@ -365,9 +379,10 @@ gpioc_interrupt_handler(void *arg)
 	SLIST_FOREACH(privs, &intr_conf->privs, next) {
 		mtx_lock(&privs->priv->mtx);
 		privs->priv->last_intr_pin = intr_conf->pin->pin;
-		mtx_unlock(&privs->priv->mtx);
 		wakeup(privs->priv);
 		selwakeup(&privs->priv->selinfo);
+		KNOTE_LOCKED(&privs->priv->selinfo.si_note, 0);
+		mtx_unlock(&privs->priv->mtx);
 	}
 
 	mtx_unlock(&intr_conf->mtx);
@@ -474,7 +489,9 @@ gpioc_cdevpriv_dtor(void *data)
 	mtx_unlock(&priv->mtx);
 
 	wakeup(&priv);
+	knlist_clear(&priv->selinfo.si_note, 0);
 	seldrain(&priv->selinfo);
+	knlist_destroy(&priv->selinfo.si_note);
 
 	mtx_destroy(&priv->mtx);
 	free(data, M_GPIOC);
@@ -495,6 +512,7 @@ gpioc_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 	priv->sc = dev->si_drv1;
 	priv->last_intr_pin = -1;
 	mtx_init(&priv->mtx, "gpioc priv", NULL, MTX_DEF);
+	knlist_init_mtx(&priv->selinfo.si_note, &priv->mtx);
 
 	return (0);
 }
@@ -665,6 +683,61 @@ gpioc_poll(struct cdev *dev, int events, struct thread *td)
 	}
 
 	return (revents);
+}
+
+static int
+gpioc_kqfilter(struct cdev *dev, struct knote *kn)
+{
+	struct gpioc_cdevpriv *priv;
+	struct knlist *knlist;
+	int err;
+
+	err = devfs_get_cdevpriv((void **)&priv);
+	if (err != 0)
+		return err;
+
+	if (SLIST_EMPTY(&priv->pins))
+		return (ENXIO);
+
+	switch(kn->kn_filter) {
+	case EVFILT_READ:
+		kn->kn_fop = &gpioc_read_filterops;
+		kn->kn_hook = (void *)priv;
+		break;
+	default:
+		return (EOPNOTSUPP);
+	}
+
+	knlist = &priv->selinfo.si_note;
+	knlist_add(knlist, kn, 0);
+
+	return (0);
+}
+
+static int
+gpioc_kqread(struct knote *kn, long hint)
+{
+	struct gpioc_cdevpriv *priv = kn->kn_hook;
+
+	if (SLIST_EMPTY(&priv->pins)) {
+		kn->kn_flags |= EV_EOF;
+		return (1);
+	} else {
+		if (priv->last_intr_pin != -1) {
+			kn->kn_data = sizeof(priv->last_intr_pin);
+			return (1);
+		}
+	}
+	return (0);
+}
+
+static void
+gpioc_kqdetach(struct knote *kn)
+{
+	struct gpioc_cdevpriv *priv = kn->kn_hook;
+	struct knlist *knlist = &priv->selinfo.si_note;
+
+	knlist_remove(knlist, kn, 0);
 }
 
 static device_method_t gpioc_methods[] = {
