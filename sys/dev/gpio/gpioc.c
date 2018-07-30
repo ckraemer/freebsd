@@ -303,8 +303,23 @@ static uint32_t
 gpioc_get_intr_config(struct gpioc_softc *sc, struct gpioc_cdevpriv *priv,
     uint32_t pin)
 {
+	struct gpioc_pin_intr	*intr_conf = &sc->sc_pin_intr[pin];
+	struct gpioc_privs	*priv_link;
+	uint32_t		flags;
 
-	return (0);
+	flags = intr_conf->pin->flags;
+
+	if (flags == 0)
+		return (0);
+
+	SLIST_FOREACH(priv_link, &intr_conf->privs, next) {
+		if (priv_link->priv == priv) {
+			flags |= GPIO_INTR_ATTACHED;
+			break;
+		}
+	}
+
+	return (flags);
 }
 
 static int

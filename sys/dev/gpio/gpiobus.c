@@ -137,6 +137,9 @@ gpio_check_flags(uint32_t caps, uint32_t flags)
 	/* Only one interrupt flag can be defined at once */
 	if ((flags & GPIO_INTR_MASK) & ((flags & GPIO_INTR_MASK) - 1))
 		return (EINVAL);
+	/* The interrupt attached flag cannot be set */
+	if (flags & GPIO_INTR_ATTACHED)
+		return (EINVAL);
 
 	return (0);
 }
