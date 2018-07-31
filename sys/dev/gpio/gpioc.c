@@ -536,6 +536,9 @@ gpioc_cdevpriv_dtor(void *data)
 		}
 		KASSERT(consistency == 1,
 		    ("inconsistent links between pin config and cdevpriv"));
+		if (gpioc_intr_reconfig_allowed(priv, pin_link->pin)) {
+			gpioc_release_pin_intr(pin_link->pin);
+		}
 		mtx_unlock(&pin_link->pin->mtx);
 		SLIST_REMOVE(&priv->pins, pin_link, gpioc_pins, next);
 		free(pin_link, M_GPIOC);
