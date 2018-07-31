@@ -393,6 +393,9 @@ gpioc_interrupt_handler(void *arg)
 
 	SLIST_FOREACH(privs, &intr_conf->privs, next) {
 		mtx_lock(&privs->priv->mtx);
+		if (privs->priv->last_intr_pin != -1)
+			device_printf(privs->priv->sc->sc_dev, "unhandled "
+			    "interrupt on pin %d\n", intr_conf->pin->pin);
 		privs->priv->last_intr_pin = intr_conf->pin->pin;
 		wakeup(privs->priv);
 		selwakeup(&privs->priv->selinfo);
