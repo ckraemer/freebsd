@@ -64,7 +64,9 @@ struct gpioc_softc {
 };
 
 struct gpioc_pin_intr {
+	struct gpioc_softc				*sc;
 	gpio_pin_t					pin;
+	bool						config_locked;
 	int						intr_rid;
 	struct resource					*intr_res;
 	void						*intr_cookie;
@@ -145,6 +147,9 @@ gpioc_allocate_pin_intr(struct gpioc_pin_intr *intr_conf, uint32_t flags)
 {
 	int err;
 
+	intr_conf->config_locked = true;
+	mtx_unlock(&intr_conf->mtx);
+
 	intr_conf->intr_res = gpio_alloc_intr_resource(intr_conf->pin->dev,
 	    &intr_conf->intr_rid, RF_ACTIVE, intr_conf->pin, flags);
 	if (intr_conf->intr_res == NULL)
@@ -157,6 +162,9 @@ gpioc_allocate_pin_intr(struct gpioc_pin_intr *intr_conf, uint32_t flags)
 		return (err);
 
 	intr_conf->pin->flags = flags;
+	mtx_lock(&intr_conf->mtx);
+	intr_conf->config_locked = false;
+	wakeup(&intr_conf->config_locked);
 
 	return (0);
 }
@@ -165,6 +173,9 @@ static int
 gpioc_release_pin_intr(struct gpioc_pin_intr *intr_conf)
 {
 	int err;
+
+	intr_conf->config_locked = true;
+	mtx_unlock(&intr_conf->mtx);
 
 	if (intr_conf->intr_cookie != NULL) {
 		err = bus_teardown_intr(intr_conf->pin->dev,
@@ -187,6 +198,9 @@ gpioc_release_pin_intr(struct gpioc_pin_intr *intr_conf)
 	}
 
 	intr_conf->pin->flags = 0;
+	mtx_lock(&intr_conf->mtx);
+	intr_conf->config_locked = false;
+	wakeup(&intr_conf->config_locked);
 
 	return (0);
 }
@@ -201,7 +215,7 @@ gpioc_attach_priv_pin(struct gpioc_cdevpriv *priv,
 
 	consistency_a = 0;
 	consistency_b = 0;
-	mtx_lock(&intr_conf->mtx);
+	mtx_assert(&intr_conf->mtx, MA_OWNED);
 	mtx_lock(&priv->mtx);
 	SLIST_FOREACH(priv_link, &intr_conf->privs, next) {
 		if (priv_link->priv == priv)
@@ -240,7 +254,6 @@ gpioc_attach_priv_pin(struct gpioc_cdevpriv *priv,
 	SLIST_INSERT_HEAD(&intr_conf->privs, priv_link, next);
 	SLIST_INSERT_HEAD(&priv->pins, pin_link, next);
 	mtx_unlock(&priv->mtx);
-	mtx_unlock(&intr_conf->mtx);
 
 	return (0);
 }
@@ -255,7 +268,7 @@ gpioc_detach_priv_pin(struct gpioc_cdevpriv *priv,
 
 	consistency_a = 0;
 	consistency_b = 0;
-	mtx_lock(&intr_conf->mtx);
+	mtx_assert(&intr_conf->mtx, MA_OWNED);
 	mtx_lock(&priv->mtx);
 	SLIST_FOREACH_SAFE(priv_link, &intr_conf->privs, next, priv_link_temp) {
 		if (priv_link->priv == priv) {
@@ -277,7 +290,6 @@ gpioc_detach_priv_pin(struct gpioc_cdevpriv *priv,
 	KASSERT(consistency_a == consistency_b,
 	    ("inconsistent links between pin config and cdevpriv"));
 	mtx_unlock(&priv->mtx);
-	mtx_unlock(&intr_conf->mtx);
 
 	return (0);
 }
@@ -288,8 +300,11 @@ gpioc_intr_reconfig_allowed(struct gpioc_cdevpriv *priv,
 {
 	struct gpioc_privs	*priv_link;
 
+	mtx_assert(&intr_conf->mtx, MA_OWNED);
+
 	if (SLIST_EMPTY(&intr_conf->privs))
 		return (true);
+
 	SLIST_FOREACH(priv_link, &intr_conf->privs, next) {
 		if (priv_link->priv != priv)
 			return (false);
@@ -333,52 +348,52 @@ gpioc_set_intr_config(struct gpioc_softc *sc, struct gpioc_cdevpriv *priv,
 	if (intr_conf->pin->flags == 0 && flags == 0) {
 		/* No interrupt configured and none requested: Do nothing. */
 		return (0);
-	} else if (intr_conf->pin->flags == 0 && flags != 0) {
+	}
+	mtx_lock(&intr_conf->mtx);
+	while (intr_conf->config_locked == true)
+		mtx_sleep(&intr_conf->config_locked, &intr_conf->mtx, 0,
+		    "gpicfg", 0);
+	if (intr_conf->pin->flags == 0 && flags != 0) {
 		/* No interrupt is configured, but one is requested: Allocate
 		   and setup interrupt on the according pin. */
 		res = gpioc_allocate_pin_intr(intr_conf, flags);
-		if (res != 0)
-			return (res);
-		res = gpioc_attach_priv_pin(priv, intr_conf);
-		if (res != 0 && res != EEXIST)
-			return (res);
+		if (res == 0)
+			res = gpioc_attach_priv_pin(priv, intr_conf);
+		if (res == EEXIST)
+			res = 0;
 	} else if (intr_conf->pin->flags == flags) {
 		/* Same interrupt requested as already configured: Attach the
 		   cdevpriv to the corresponding pin. */
 		res = gpioc_attach_priv_pin(priv, intr_conf);
-		if (res != 0 && res != EEXIST)
-			return (res);
+		if (res == EEXIST)
+			res = 0;
 	} else if (intr_conf->pin->flags != 0 && flags == 0) {
 		/* Interrupt configured, but none requested: Teardown and
 		   release the pin when no other cdevpriv is attached.
 		   Otherwise just detach pin and cdevpriv from each other. */
 		if (gpioc_intr_reconfig_allowed(priv, intr_conf)) {
 			res = gpioc_release_pin_intr(intr_conf);
-			if (res != 0)
-				return (res);
 		}
-		res = gpioc_detach_priv_pin(priv, intr_conf);
-		if (res != 0)
-			return (res);
+		if (res == 0)
+			res = gpioc_detach_priv_pin(priv, intr_conf);
 	} else {
 		/* Other flag requested than configured: Reconfigure when no
 		   other cdevpriv is are attached to the pin. */
 		if (!gpioc_intr_reconfig_allowed(priv, intr_conf))
-			return (EBUSY);
+			res = EBUSY;
 		else {
 			res = gpioc_release_pin_intr(intr_conf);
-			if (res != 0)
-				return (res);
-			res = gpioc_allocate_pin_intr(intr_conf, flags);
-			if (res != 0)
-				return (res);
-			res = gpioc_attach_priv_pin(priv, intr_conf);
-			if (res != 0 && res != EEXIST)
-				return (res);
+			if (res == 0)
+				res = gpioc_allocate_pin_intr(intr_conf, flags);
+			if (res == 0)
+				res = gpioc_attach_priv_pin(priv, intr_conf);
+			if (res == EEXIST)
+				res = 0;
 		}
 	}
+	mtx_unlock(&intr_conf->mtx);
 
-	return (0);
+	return (res);
 }
 
 static void
@@ -386,16 +401,33 @@ gpioc_interrupt_handler(void *arg)
 {
 	struct gpioc_pin_intr *intr_conf;
 	struct gpioc_privs *privs;
+	struct gpioc_softc *sc;
 
 	intr_conf = arg;
+	sc = intr_conf->sc;
 
 	mtx_lock(&intr_conf->mtx);
+
+	if (intr_conf->config_locked == true) {
+		device_printf(sc->sc_dev, "Interrupt configuration in "
+		    "progress. Discarding interrupt on pin %d.\n",
+		    intr_conf->pin->pin);
+		mtx_unlock(&intr_conf->mtx);
+		return;
+	}
+
+	if (SLIST_EMPTY(&intr_conf->privs)) {
+		device_printf(sc->sc_dev, "No file descriptor associated with "
+		    "occurred interrupt on pin %d.\n", intr_conf->pin->pin);
+		mtx_unlock(&intr_conf->mtx);
+		return;
+	}
 
 	SLIST_FOREACH(privs, &intr_conf->privs, next) {
 		mtx_lock(&privs->priv->mtx);
 		if (privs->priv->last_intr_pin != -1)
-			device_printf(privs->priv->sc->sc_dev, "unhandled "
-			    "interrupt on pin %d\n", intr_conf->pin->pin);
+			device_printf(sc->sc_dev, "Unhandled interrupt on pin "
+			    "%d.\n", intr_conf->pin->pin);
 		privs->priv->last_intr_pin = intr_conf->pin->pin;
 		wakeup(privs->priv);
 		selwakeup(&privs->priv->selinfo);
@@ -433,6 +465,7 @@ gpioc_attach(device_t dev)
 	for (int i = 0; i <= sc->sc_npins; i++) {
 		sc->sc_pin_intr[i].pin = malloc(sizeof(struct gpiobus_pin),
 		    M_GPIOC, M_WAITOK | M_ZERO);
+		sc->sc_pin_intr[i].sc = sc;
 		sc->sc_pin_intr[i].pin->pin = i;
 		sc->sc_pin_intr[i].pin->dev = sc->sc_pdev;
 		mtx_init(&sc->sc_pin_intr[i].mtx, "gpioc pin", NULL, MTX_DEF);
@@ -489,6 +522,9 @@ gpioc_cdevpriv_dtor(void *data)
 	SLIST_FOREACH_SAFE(pin_link, &priv->pins, next, pin_link_temp) {
 		consistency = 0;
 		mtx_lock(&pin_link->pin->mtx);
+		while (pin_link->pin->config_locked == true)
+			mtx_sleep(&pin_link->pin->config_locked,
+			    &pin_link->pin->mtx, 0, "gpicfg", 0);
 		SLIST_FOREACH_SAFE(priv_link, &pin_link->pin->privs, next,
 		    priv_link_temp) {
 			if (priv_link->priv == priv) {
@@ -552,7 +588,7 @@ gpioc_read(struct cdev *dev, struct uio *uio, int ioflag)
 	mtx_lock(&priv->mtx);
 	do {
 		if (!SLIST_EMPTY(&priv->pins))
-			err = msleep(priv, &priv->mtx, PCATCH, "gpiocintr", 0);
+			err = mtx_sleep(priv, &priv->mtx, PCATCH, "gpintr", 0);
 		else
 			err = ENXIO;
 	} while (err == EWOULDBLOCK);
