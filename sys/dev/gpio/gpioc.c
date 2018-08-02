@@ -35,6 +35,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/conf.h>
 #include <sys/gpio.h>
 #include <sys/ioccom.h>
+#include <sys/filio.h>
+#include <sys/fcntl.h>
+#include <sys/sigio.h>
+#include <sys/signalvar.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/uio.h>
@@ -78,6 +82,8 @@ struct gpioc_cdevpriv {
 	struct gpioc_softc			*sc;
 	uint32_t				last_intr_pin;
 	struct selinfo				selinfo;
+	bool					async;
+	struct sigio				*sigio;
 	struct mtx				mtx;
 	SLIST_HEAD(gpioc_pins_list, gpioc_pins)	pins;
 };
@@ -432,6 +438,8 @@ gpioc_interrupt_handler(void *arg)
 		wakeup(privs->priv);
 		selwakeup(&privs->priv->selinfo);
 		KNOTE_LOCKED(&privs->priv->selinfo.si_note, 0);
+		if (privs->priv->async == true && privs->priv->sigio != NULL)
+			pgsigio(&privs->priv->sigio, SIGIO, 0);
 		mtx_unlock(&privs->priv->mtx);
 	}
 
@@ -549,6 +557,7 @@ gpioc_cdevpriv_dtor(void *data)
 	knlist_clear(&priv->selinfo.si_note, 0);
 	seldrain(&priv->selinfo);
 	knlist_destroy(&priv->selinfo.si_note);
+	funsetown(&priv->sigio);
 
 	mtx_destroy(&priv->mtx);
 	free(data, M_GPIOC);
@@ -703,6 +712,32 @@ gpioc_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			c32 = (struct gpio_config_32 *)arg;
 			res = GPIO_PIN_CONFIG_32(sc->sc_pdev, c32->first_pin,
 			    c32->num_pins, c32->pin_flags);
+			break;
+		case FIONBIO:
+			/* This dummy handler is necessary to prevent fcntl()
+			   from failing. The actual handling of non-blocking IO
+			   is done using the O_NONBLOCK ioflag passed to the
+			   read() syscall. */
+			res = 0;
+			break;
+		case FIOASYNC:
+			res = devfs_get_cdevpriv((void **)&priv);
+			if (res == 0) {
+				if (*(int *)arg == FASYNC)
+					priv->async = true;
+				else
+					priv->async = false;
+			}
+			break;
+		case FIOGETOWN:
+			res = devfs_get_cdevpriv((void **)&priv);
+			if (res == 0)
+				*(int *)arg = fgetown(&priv->sigio);
+			break;
+		case FIOSETOWN:
+			res = devfs_get_cdevpriv((void **)&priv);
+			if (res == 0)
+				res = fsetown(*(int *)arg, &priv->sigio);
 			break;
 		default:
 			return (ENOTTY);
