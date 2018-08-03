@@ -598,12 +598,19 @@ gpioc_read(struct cdev *dev, struct uio *uio, int ioflag)
 		return err;
 
 	mtx_lock(&priv->mtx);
-	do {
-		if (!SLIST_EMPTY(&priv->pins))
-			err = mtx_sleep(priv, &priv->mtx, PCATCH, "gpintr", 0);
-		else
+	while (priv->last_intr_pin == -1) {
+		if (SLIST_EMPTY(&priv->pins)) {
 			err = ENXIO;
-	} while (err == EWOULDBLOCK);
+			break;
+		} else if (ioflag & O_NONBLOCK) {
+			err = EWOULDBLOCK;
+			break;
+		} else {
+			err = mtx_sleep(priv, &priv->mtx, PCATCH, "gpintr", 0);
+			if (err != 0)
+				break;
+		}
+	}
 
 	if (err == 0 && priv->last_intr_pin != -1)
 	{
