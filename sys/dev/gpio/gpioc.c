@@ -526,7 +526,6 @@ gpioc_cdevpriv_dtor(void *data)
 
 	priv = data;
 
-	mtx_lock(&priv->mtx);
 	SLIST_FOREACH_SAFE(pin_link, &priv->pins, next, pin_link_temp) {
 		consistency = 0;
 		mtx_lock(&pin_link->pin->mtx);
@@ -551,7 +550,6 @@ gpioc_cdevpriv_dtor(void *data)
 		SLIST_REMOVE(&priv->pins, pin_link, gpioc_pins, next);
 		free(pin_link, M_GPIOC);
 	}
-	mtx_unlock(&priv->mtx);
 
 	wakeup(&priv);
 	knlist_clear(&priv->selinfo.si_note, 0);
